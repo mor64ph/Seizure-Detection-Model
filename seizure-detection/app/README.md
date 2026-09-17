@@ -81,5 +81,5 @@ trace is dropped as too coarse to be worth drawing.
 ## Performance
 
 `analyse()` is cached on the file bytes, so re-selecting a file is free and the result
-survives navigation. The decoded montage is stored at 64 Hz — a sixteenth of the memory of
-the 256 Hz original, still ample for drawing traces. The model scores the full-rate signal.
+survives navigation between pages. The model always scores the full 256 Hz signal; only the
+stored copy used for drawing traces is decimated, to the byte budget described above.
