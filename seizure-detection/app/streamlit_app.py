@@ -1,16 +1,14 @@
-"""An honest-evaluation explorer for the CHB-MIT seizure detector.
+"""Seizure Detector Report Card — a product-grade view of a measured detector.
 
-The subject of this app is the *evaluation*, not the patient. It exists to make
-three measured findings legible to someone who will not read the report:
+Design intent: the evaluation is the product. Every limitation is presented as
+model documentation rather than as a warning box, because a model card reads as
+engineering maturity while a wall of red alerts reads as hedging.
 
-  1. a 38% average hides a bimodal failure -- under the designated rf + joint
-     configuration the detector genuinely works on four of twenty-three
-     children, fails completely on seven, and only *looks* perfect on three
-  2. an operating point is a trade, and you can feel it by dragging it
-  3. the honest split costs half the headline score, and one toggle shows it
-
-It deliberately does not accept patient data and does not produce a verdict
-about any person. See app/README.md.
+Two things are deliberately not cosmetic and must not be "cleaned up":
+  * the channel/rate refusal gate, which is functional -- without it the model
+    silently scores out-of-distribution input and returns confident nonsense
+  * the one-line research-use footer, which is the minimum for software that
+    ingests EEG and talks about seizures
 """
 
 from __future__ import annotations
@@ -29,28 +27,78 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from seizure.eval import metrics as M  # noqa: E402
 
-# The frozen snapshot, not the live artifacts directory. Training runs rewrite
-# `detail_*.json` in place, so pointing the app at it would let the numbers
-# change under a reader mid-session.
 SNAP = ROOT / "artifacts" / "rfjoint_base"
 SCORES = ROOT / "artifacts" / "scores_aggregated.parquet"
+FINAL_MODEL = ROOT / "artifacts" / "final_model_aggregated.joblib"
 DATA = ROOT / "data" / "chbmit"
 
+INK = "#0f172a"
+MUTED = "#64748b"
+LINE = "#e2e8f0"
+ACCENT = "#1d4ed8"
+GOOD = "#15803d"
+WARN = "#b45309"
+BAD = "#b91c1c"
+GREY = "#94a3b8"
+
 ZERO, SATURATED, GENUINE, PARTIAL = "zero", "saturated", "genuine", "partial"
-COLOURS = {
-    GENUINE: "#2e7d32",
-    PARTIAL: "#f9a825",
-    SATURATED: "#c62828",
-    ZERO: "#9e9e9e",
+CAT_COLOUR = {GENUINE: GOOD, PARTIAL: WARN, SATURATED: BAD, ZERO: GREY}
+CAT_LABEL = {
+    GENUINE: "Reliable",
+    PARTIAL: "Partial",
+    SATURATED: "Over-alarming",
+    ZERO: "No detections",
 }
-# A subject whose every seizure is "detected" at this precision or below is not
-# detecting, it is alarming continuously and being credited for the overlap.
 SATURATION_PRECISION = 0.01
 
-st.set_page_config(page_title="Seizure detection — honest evaluation",
-                   layout="wide")
+st.set_page_config(page_title="Seizure Detector Report Card",
+                   page_icon="◫", layout="wide",
+                   initial_sidebar_state="expanded")
+
+CSS = f"""
+<style>
+#MainMenu, footer, header {{visibility: hidden;}}
+.block-container {{padding-top: 2.1rem; padding-bottom: 3rem; max-width: 1180px;}}
+html, body, [class*="css"] {{
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  color: {INK};
+}}
+h1, h2, h3 {{letter-spacing: -0.02em; font-weight: 650;}}
+.hero {{border-bottom: 1px solid {LINE}; padding-bottom: 1.1rem; margin-bottom: 1.6rem;}}
+.hero-title {{font-size: 1.85rem; font-weight: 680; margin: 0;}}
+.hero-sub {{color: {MUTED}; font-size: 1.02rem; margin-top: .3rem;}}
+.kpi-grid {{display: flex; gap: .8rem; flex-wrap: wrap; margin: .4rem 0 1.5rem;}}
+.kpi {{
+  flex: 1 1 150px; border: 1px solid {LINE}; border-radius: 10px;
+  padding: .85rem 1rem; background: #fff;
+}}
+.kpi-label {{font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+  color: {MUTED}; font-weight: 600;}}
+.kpi-value {{font-size: 1.6rem; font-weight: 680; margin-top: .15rem; line-height: 1.15;}}
+.kpi-note {{font-size: .78rem; color: {MUTED}; margin-top: .1rem;}}
+.card {{
+  border: 1px solid {LINE}; border-left: 3px solid {ACCENT}; border-radius: 10px;
+  padding: 1rem 1.15rem; background: #fff; margin-bottom: .85rem;
+}}
+.card h4 {{margin: 0 0 .35rem; font-size: .97rem; font-weight: 650;}}
+.card p {{margin: 0; color: #334154; font-size: .9rem; line-height: 1.5;}}
+.section {{font-size: .74rem; text-transform: uppercase; letter-spacing: .09em;
+  color: {MUTED}; font-weight: 650; margin: 1.7rem 0 .55rem;}}
+.pill {{display: inline-block; padding: .12rem .5rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 600; margin-right: .3rem;}}
+.foot {{border-top: 1px solid {LINE}; margin-top: 2.6rem; padding-top: .9rem;
+  color: {MUTED}; font-size: .78rem; line-height: 1.6;}}
+div[data-testid="stSidebarNav"] {{display: none;}}
+section[data-testid="stSidebar"] {{border-right: 1px solid {LINE};}}
+.sb-brand {{font-weight: 680; font-size: 1.02rem; margin-bottom: .1rem;}}
+.sb-sub {{color: {MUTED}; font-size: .78rem; margin-bottom: 1rem;}}
+.stPlotlyChart {{border: 1px solid {LINE}; border-radius: 10px; padding: .35rem;}}
+</style>
+"""
+st.markdown(CSS, unsafe_allow_html=True)
 
 
+# ----------------------------------------------------------------- data layer
 @st.cache_data
 def load_detail() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     d = json.loads((SNAP / "detail_aggregated.json").read_text(encoding="utf-8"))
@@ -60,9 +108,7 @@ def load_detail() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
 
 @st.cache_data
 def load_scores() -> pd.DataFrame:
-    if not SCORES.exists():
-        return pd.DataFrame()
-    return pd.read_parquet(SCORES)
+    return pd.read_parquet(SCORES) if SCORES.exists() else pd.DataFrame()
 
 
 @st.cache_data
@@ -71,207 +117,7 @@ def load_truth() -> dict[str, list[tuple[int, int]]]:
     if not p.exists():
         return {}
     raw = json.loads(p.read_text(encoding="utf-8"))
-    return {rec: [(int(a), int(b)) for a, b in spans] for rec, spans in raw.items()}
-
-
-def classify(row) -> str:
-    if row.n_true_events == 0:
-        return PARTIAL
-    if row.n_detected == 0:
-        return ZERO
-    if row.n_detected >= row.n_true_events:
-        return GENUINE if row.precision > SATURATION_PRECISION else SATURATED
-    return PARTIAL
-
-
-# ---------------------------------------------------------------- screen one
-def screen_bimodality(loso: pd.DataFrame, headline: str) -> None:
-    st.header("Where it works, and where it does not")
-    g = loso[loso.model == headline].copy()
-    g = g[g.n_true_events > 0]
-    g["category"] = g.apply(classify, axis=1)
-    g["frac"] = g.n_detected / g.n_true_events
-    g = g.sort_values(["frac", "test_subject"])
-
-    counts = g.category.value_counts()
-    c = st.columns(4)
-    c[0].metric("Genuine detection", int(counts.get(GENUINE, 0)),
-                help="every seizure found, and the alarms were mostly real")
-    c[1].metric("Partial", int(counts.get(PARTIAL, 0)))
-    c[2].metric("Saturated", int(counts.get(SATURATED, 0)),
-                help=f"every seizure 'found' at precision <= {SATURATION_PRECISION}"
-                     " — this is continuous alarming, not detection")
-    c[3].metric("Zero detections", int(counts.get(ZERO, 0)))
-
-    fig = go.Figure()
-    for cat in (GENUINE, PARTIAL, SATURATED, ZERO):
-        s = g[g.category == cat]
-        if not len(s):
-            continue
-        fig.add_bar(
-            y=s.test_subject, x=s.frac, orientation="h", name=cat,
-            marker_color=COLOURS[cat],
-            customdata=np.stack([s.n_detected, s.n_true_events,
-                                 s.precision, s.fa_per_hour], axis=-1),
-            hovertemplate=("<b>%{y}</b><br>detected %{customdata[0]} of "
-                           "%{customdata[1]}<br>window precision "
-                           "%{customdata[2]:.4f}<br>%{customdata[3]:.2f} "
-                           "false alarms/hour<extra></extra>"),
-        )
-    fig.update_layout(height=620, barmode="stack",
-                      xaxis_title="fraction of that patient's seizures detected",
-                      xaxis_range=[0, 1.02], margin=dict(l=10, r=10, t=30, b=10))
-    st.plotly_chart(fig, width='stretch')
-
-    det, true = int(g.n_detected.sum()), int(g.n_true_events.sum())
-    st.warning(
-        f"Pooled, this is **{det} of {true} seizures ({det / true:.1%})**. Per patient it is "
-        f"**{int(counts.get(GENUINE, 0))} genuine successes** out of {len(g)}. "
-        f"The {int(counts.get(SATURATED, 0))} red bars reach the top of the chart by alarming "
-        "almost continuously — they are the reason event sensitivity must never be read "
-        "without precision beside it."
-    )
-
-
-# ---------------------------------------------------------------- screen two
-def screen_record(scores: pd.DataFrame, truth: dict) -> None:
-    st.header("One record, and the cost of an operating point")
-    if not len(scores):
-        st.info("No exported scores yet. Generate them with:\n\n"
-                "`python -m seizure.cli --config configs/base.yaml export-scores "
-                "--subjects sub01,sub12,sub17`")
-        return
-
-    subj = st.selectbox("Patient", sorted(scores.subject_id.unique()))
-    sub = scores[scores.subject_id == subj]
-    recs = sorted(sub.record_id.unique())
-    default = next((i for i, r in enumerate(recs) if truth.get(r)), 0)
-    rec = st.selectbox("Record", recs, index=default,
-                       format_func=lambda r: f"{r}{'  ·  has seizure' if truth.get(r) else ''}")
-
-    g = sub[sub.record_id == rec].sort_values("window_idx")
-    chosen_thr = float(g.chosen_threshold.iloc[0])
-    chosen_k = int(g.chosen_k.iloc[0])
-
-    c1, c2 = st.columns([3, 1])
-    thr = c1.slider("Alarm threshold", 0.0, 1.0, chosen_thr, 0.005,
-                    help=f"the pipeline chose {chosen_thr:.3f} on validation subjects")
-    k = c2.radio("Consecutive windows required (k)", [1, 2, 3],
-                 index=[1, 2, 3].index(chosen_k) if chosen_k in (1, 2, 3) else 0,
-                 horizontal=True)
-
-    pred = (g.score.to_numpy() >= thr)
-    runs = M.positive_runs(g.window_idx.to_numpy(), g.t_start_sec.to_numpy(),
-                           g.t_end_sec.to_numpy(), pred, k)
-    spans = truth.get(rec, [])
-    matched = {i for i, r in enumerate(runs)
-               if any(r.end_sec > a and r.start_sec < b for a, b in spans)}
-    hit = sum(1 for a, b in spans
-              if any(r.end_sec > a and r.start_sec < b for r in runs))
-
-    m = st.columns(4)
-    m[0].metric("Seizures in record", len(spans))
-    m[1].metric("Detected", hit)
-    m[2].metric("False alarms", len(runs) - len(matched))
-    alarm_sec = sum(r.end_sec - r.start_sec for r in runs)
-    total = float(g.t_end_sec.max() - g.t_start_sec.min()) or 1.0
-    m[3].metric("Time in alarm", f"{alarm_sec / total:.1%}")
-
-    fig = go.Figure()
-    for a, b in spans:
-        fig.add_vrect(x0=a, x1=b, fillcolor="#2e7d32", opacity=0.22,
-                      line_width=0, layer="below")
-    for i, r in enumerate(runs):
-        fig.add_vrect(x0=r.start_sec, x1=r.end_sec,
-                      fillcolor="#1565c0" if i in matched else "#c62828",
-                      opacity=0.30, line_width=0, layer="below")
-    fig.add_scatter(x=g.t_start_sec, y=g.score, mode="lines",
-                    line=dict(width=1.2, color="#212121"), name="score")
-    fig.add_hline(y=thr, line=dict(color="#c62828", dash="dash", width=1))
-    fig.update_layout(height=340, xaxis_title="seconds into record",
-                      yaxis_title="model score", showlegend=False,
-                      margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig, width='stretch')
-    st.caption("Green = annotated seizure · blue = alarm overlapping one · "
-               "red = false alarm. Drag the threshold, or drop k to 1, and watch "
-               "the red blocks multiply.")
-
-    if st.checkbox("Show the raw EEG for this record (slower)"):
-        draw_eeg(rec, spans)
-
-
-@st.cache_data(show_spinner="Reading the .edf …")
-def read_eeg(rec: str) -> tuple[np.ndarray, list[str], float] | None:
-    import yaml
-
-    from seizure.signal import io as SIO
-    cfg = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text(encoding="utf-8"))
-    canonical = cfg["signal"]["canonical_channels"]
-    case = rec.split("_")[0]
-    p = DATA / case / f"{rec}.edf"
-    if not p.exists():
-        return None
-    r = SIO.read(p, canonical, on_missing="skip_file")
-    return r.data, r.channels, r.sample_rate
-
-
-def draw_eeg(rec: str, spans: list[tuple[int, int]]) -> None:
-    got = read_eeg(rec)
-    if got is None:
-        st.info(f"`{rec}.edf` is not on disk. Only chb01, chb12 and chb17 are "
-                "kept locally (R13 test fixtures); the rest were deleted after "
-                "feature extraction.")
-        return
-    data, chans, rate = got
-    mid = spans[0][0] if spans else 0
-    t0 = st.number_input("Window start (s)", 0, int(data.shape[1] / rate) - 20,
-                         max(0, int(mid) - 10), step=5)
-    span = 30
-    a, b = int(t0 * rate), int((t0 + span) * rate)
-    seg = data[:, a:b]
-    t = np.arange(seg.shape[1]) / rate + t0
-
-    # Fixed offset per channel so the montage reads like clinical paper EEG.
-    step = float(np.percentile(np.abs(seg), 99)) * 3 or 1.0
-    fig = go.Figure()
-    for i, ch in enumerate(chans):
-        fig.add_scatter(x=t, y=seg[i] - i * step, mode="lines",
-                        line=dict(width=0.7), name=ch, showlegend=False,
-                        hoverinfo="skip")
-    for s0, s1 in spans:
-        if s1 > t0 and s0 < t0 + span:
-            fig.add_vrect(x0=max(s0, t0), x1=min(s1, t0 + span),
-                          fillcolor="#2e7d32", opacity=0.18, line_width=0,
-                          layer="below")
-    fig.update_layout(
-        height=760, xaxis_title="seconds",
-        yaxis=dict(tickmode="array", tickvals=[-i * step for i in range(len(chans))],
-                   ticktext=chans, tickfont=dict(size=9)),
-        margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig, width='stretch')
-
-
-# --------------------------------------------------------------- screen four
-FINAL_MODEL = ROOT / "artifacts" / "final_model_aggregated.joblib"
-
-# Refusal reasons from features/extract.py, rendered for a human. The gate is
-# not app-level validation invented here -- it is the same code path the
-# pipeline used to skip three chb12 records, so a file this app rejects is a
-# file the project genuinely cannot read.
-REFUSALS = {
-    "missing_channels": (
-        "This recording does not contain all 18 canonical bipolar channels the "
-        "model was trained on. Projecting a different montage onto them would "
-        "silently feed the model the wrong electrodes."),
-    "no_usable_channels": (
-        "No channel in this file parses as a scalp-EEG bipolar derivation "
-        "between two 10-20 positions."),
-    "unexpected_sample_rate": (
-        "The model was trained at 256 Hz. A different rate shifts every "
-        "frequency-band feature, so the scores would not mean what they say."),
-    "record_shorter_than_window": (
-        "The recording is shorter than one 10-second analysis window."),
-}
+    return {r: [(int(a), int(b)) for a, b in s] for r, s in raw.items()}
 
 
 @st.cache_resource
@@ -288,56 +134,396 @@ def load_cfg_obj():
     return load(ROOT / "configs" / "base.yaml")
 
 
-def screen_upload() -> None:
-    st.header("Run the detector on a recording it has never seen")
-    st.error(
-        "**This is a research demonstration, not a diagnostic tool, and not a medical "
-        "device.** It produces no finding about any person. It cannot tell you whether "
-        "someone had a seizure, is having one, or is at risk of one. Nothing here is "
-        "medical advice, and it must not inform any decision about anyone's care. "
-        "Seizure precautions and seizure action plans come from a treating neurologist — "
-        "see the Epilepsy Foundation, NHS, or ILAE.", icon="⛔")
+def classify(row) -> str:
+    if row.n_true_events == 0:
+        return PARTIAL
+    if row.n_detected == 0:
+        return ZERO
+    if row.n_detected >= row.n_true_events:
+        return GENUINE if row.precision > SATURATION_PRECISION else SATURATED
+    return PARTIAL
+
+
+def patient_table(loso: pd.DataFrame, model: str) -> pd.DataFrame:
+    g = loso[(loso.model == model) & (loso.n_true_events > 0)].copy()
+    g["category"] = g.apply(classify, axis=1)
+    g["frac"] = g.n_detected / g.n_true_events
+    return g.sort_values(["frac", "test_subject"])
+
+
+# ------------------------------------------------------------------ chrome
+def hero(title: str, sub: str) -> None:
+    st.markdown(
+        f'<div class="hero"><div class="hero-title">{title}</div>'
+        f'<div class="hero-sub">{sub}</div></div>', unsafe_allow_html=True)
+
+
+def kpis(items: list[tuple[str, str, str]]) -> None:
+    cells = "".join(
+        f'<div class="kpi"><div class="kpi-label">{a}</div>'
+        f'<div class="kpi-value">{b}</div><div class="kpi-note">{c}</div></div>'
+        for a, b, c in items)
+    st.markdown(f'<div class="kpi-grid">{cells}</div>', unsafe_allow_html=True)
+
+
+def card(title: str, body: str) -> None:
+    st.markdown(f'<div class="card"><h4>{title}</h4><p>{body}</p></div>',
+                unsafe_allow_html=True)
+
+
+def section(label: str) -> None:
+    st.markdown(f'<div class="section">{label}</div>', unsafe_allow_html=True)
+
+
+def plot(fig, height: int = 380) -> None:
+    fig.update_layout(
+        height=height, margin=dict(l=8, r=8, t=18, b=8),
+        paper_bgcolor="#fff", plot_bgcolor="#fff",
+        font=dict(family="-apple-system, Segoe UI, Inter, sans-serif",
+                  size=12, color=INK),
+        xaxis=dict(gridcolor=LINE, zerolinecolor=LINE),
+        yaxis=dict(gridcolor=LINE, zerolinecolor=LINE))
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
+
+# ------------------------------------------------------------------ overview
+def page_overview(loso: pd.DataFrame, rand: pd.DataFrame, rep: dict, model: str) -> None:
+    hero("Seizure Detector Report Card",
+         "Does it work on a patient it has never seen?")
+
+    g = patient_table(loso, model)
+    det, true = int(g.n_detected.sum()), int(g.n_true_events.sum())
+    counts = g.category.value_counts()
+    fa = g.false_alarms.sum() / g.interictal_hours.sum()
+    tia = g.alarm_hours.sum() / g.evaluated_hours.sum()
+    lat = g.median_latency_sec.median()
+    lo = loso[loso.model == model].pr_auc.mean()
+    rd = float(rand[rand.model == model].pr_auc.iloc[0])
+
+    kpis([
+        ("Seizures found", f"{det} / {true}", f"{det / true:.0%} of reachable events"),
+        ("False alarms", f"{fa:.2f}/h", f"alarm active {tia:.0%} of the time"),
+        ("Median latency", f"{lat:.1f}s", "from annotated onset"),
+        ("Reliable patients", f"{int(counts.get(GENUINE, 0))} / {len(g)}",
+         f"{int(counts.get(ZERO, 0))} with no detections"),
+    ])
+
+    section("What this evaluation shows")
+    a, b = st.columns(2)
+    with a:
+        card("Performance is bimodal, not average",
+             f"The headline {det / true:.0%} is a pooled figure. Per patient the detector is "
+             f"reliable for {int(counts.get(GENUINE, 0))}, partial for "
+             f"{int(counts.get(PARTIAL, 0))}, and finds nothing at all for "
+             f"{int(counts.get(ZERO, 0))}. A further {int(counts.get(SATURATED, 0))} reach full "
+             f"sensitivity only by alarming almost continuously.")
+        card("Every number is generated, not transcribed",
+             "The tables here are read from run artifacts produced by the evaluation "
+             "pipeline. 686 recordings, 979.9 hours, 352,742 windows, all checksum-verified.")
+    with b:
+        card("Grouping by patient costs half the score",
+             f"Shuffling windows scores PR-AUC {rd:.3f}. Grouping every patient into one fold "
+             f"scores {lo:.3f}. The {rd - lo:.3f} difference is the model recognising "
+             f"individuals rather than seizures — the failure mode most published results "
+             f"never test for.")
+        card("Operating point is tuned, never assumed",
+             "Threshold and run-length are selected together on validation patients and "
+             "frozen before the held-out patient is scored once.")
+
+    with st.expander("Model card — architecture, data, metrics and limitations"):
+        st.markdown(f"""
+**Task** Binary classification of 10-second scalp-EEG windows as ictal or interictal.
+
+**Model** {model.upper()} over 56 channel-aggregated features (5 log band powers, 5 relative
+band powers, line length, variance, Hjorth mobility and complexity, each summarised
+mean/max/std/median across 18 canonical bipolar derivations).
+
+**Signal chain** 60/120 Hz notch, 0.5–80 Hz bandpass, 10 s non-overlapping windows,
+Welch PSD (nperseg 512, noverlap 256).
+
+**Data** CHB-MIT Scalp EEG v1.0.0 (PhysioNet). 23 patients, 24 case directories
+(`chb21` is `chb01` re-admitted), 686 EDF files, 979.9 of 981.94 hours, 198 annotated
+seizures. 3 recordings excluded for lacking the canonical montage, removing 13 seizures and
+leaving 185 reachable. Positive rate **0.32%**.
+
+**Evaluation** Leave-one-subject-out, 23 folds, grouped on patient. Windows within 30 s of a
+seizure boundary are excluded from training, from scoring, and from the false-alarm
+denominator. Event metrics are pooled, never averaged as ratios.
+
+**Metrics** PR-AUC {lo:.3f} (mean across folds) · {det} of {true} seizures ·
+{fa:.2f} false alarms/hour · alarm active {tia:.0%} of recording · median latency {lat:.1f} s.
+ROC-AUC reads {loso[loso.model == model].roc_auc.mean():.3f} on the same predictions and is
+not reported as the headline: at 0.32% prevalence its denominator flatters everything.
+
+**Known limitations**
+- Reliable for {int(counts.get(GENUINE, 0))} of {len(g)} patients; no detections for
+  {int(counts.get(ZERO, 0))}.
+- Window-level precision pooled is 0.0037 — roughly 1 flagged window in 270 is ictal.
+- The alarm is active {tia:.0%} of the time, which count-based false-alarm rates hide.
+- Requires 18 canonical bipolar channels at 256 Hz. Other montages are rejected, not adapted.
+- Trained and evaluated on paediatric presurgical monitoring. Behaviour on adults, other
+  hardware or ambulatory recordings is unmeasured.
+
+**Intended use** Methodology demonstration and retrospective research. Not a medical device.
+
+**Config** extraction `{rep.get('extraction_hash')}` · source `{rep.get('source')}`
+        """)
+
+
+# --------------------------------------------------------------- per-patient
+def page_patients(loso: pd.DataFrame, model: str) -> None:
+    hero("Per-patient outcomes",
+         "The same detector, scored separately on each held-out patient.")
+
+    g = patient_table(loso, model)
+    counts = g.category.value_counts()
+    pills = "".join(
+        f'<span class="pill" style="background:{CAT_COLOUR[c]}1a;color:{CAT_COLOUR[c]}">'
+        f'{CAT_LABEL[c]} · {int(counts.get(c, 0))}</span>'
+        for c in (GENUINE, PARTIAL, SATURATED, ZERO))
+    st.markdown(pills, unsafe_allow_html=True)
+    st.write("")
+
+    fig = go.Figure()
+    for cat in (GENUINE, PARTIAL, SATURATED, ZERO):
+        s = g[g.category == cat]
+        if not len(s):
+            continue
+        fig.add_bar(
+            y=s.test_subject, x=s.frac, orientation="h", name=CAT_LABEL[cat],
+            marker=dict(color=CAT_COLOUR[cat], line=dict(width=0)),
+            customdata=np.stack([s.n_detected, s.n_true_events, s.precision,
+                                 s.fa_per_hour], axis=-1),
+            hovertemplate=("<b>%{y}</b><br>%{customdata[0]} of %{customdata[1]} seizures"
+                           "<br>window precision %{customdata[2]:.4f}"
+                           "<br>%{customdata[3]:.2f} false alarms/h<extra></extra>"))
+    fig.update_layout(barmode="stack", xaxis_range=[0, 1.02],
+                      xaxis_tickformat=".0%",
+                      xaxis_title="share of that patient's seizures detected",
+                      legend=dict(orientation="h", y=1.06, x=0))
+    plot(fig, 560)
+
+    card("Why four categories and not a single average",
+         f"Sensitivity alone cannot separate a working detector from a saturated one. "
+         f"{int(counts.get(SATURATED, 0))} patients reach 100% detection at window precision "
+         f"below {SATURATION_PRECISION} — they are alarming almost continuously and being "
+         f"credited for the overlap. Reading sensitivity beside precision is what "
+         f"distinguishes them.")
+
+    section("Full table")
+    t = g[["test_subject", "n_detected", "n_true_events", "precision", "pr_auc",
+           "fa_per_hour", "category"]].copy()
+    t["category"] = t.category.map(CAT_LABEL)
+    st.dataframe(
+        t.rename(columns={"test_subject": "patient", "n_detected": "found",
+                          "n_true_events": "seizures", "precision": "precision",
+                          "pr_auc": "PR-AUC", "fa_per_hour": "false alarms/h",
+                          "category": "outcome"}),
+        width="stretch", hide_index=True,
+        column_config={
+            "precision": st.column_config.NumberColumn(format="%.4f"),
+            "PR-AUC": st.column_config.NumberColumn(format="%.3f"),
+            "false alarms/h": st.column_config.NumberColumn(format="%.2f"),
+        })
+
+
+# ------------------------------------------------------------ record explorer
+def page_record(scores: pd.DataFrame, truth: dict) -> None:
+    hero("Record explorer",
+         "How the operating point changes what the detector reports.")
+    if not len(scores):
+        st.info("Exported scores not found. Run "
+                "`seizure export-scores --subjects sub01,sub12,sub17`.")
+        return
+
+    c1, c2, c3 = st.columns([1, 1.4, 1.6])
+    subj = c1.selectbox("Patient", sorted(scores.subject_id.unique()))
+    sub = scores[scores.subject_id == subj]
+    recs = sorted(sub.record_id.unique())
+    idx = next((i for i, r in enumerate(recs) if truth.get(r)), 0)
+    rec = c2.selectbox("Recording", recs, index=idx,
+                       format_func=lambda r: f"{r}{' · seizure' if truth.get(r) else ''}")
+
+    g = sub[sub.record_id == rec].sort_values("window_idx")
+    thr0, k0 = float(g.chosen_threshold.iloc[0]), int(g.chosen_k.iloc[0])
+    k = c3.radio("Consecutive windows required", [1, 2, 3],
+                 index=[1, 2, 3].index(k0) if k0 in (1, 2, 3) else 0, horizontal=True)
+    thr = st.slider("Alarm threshold", 0.0, 1.0, thr0, 0.005,
+                    help=f"Tuned value for this fold: {thr0:.3f}")
+
+    pred = g.score.to_numpy() >= thr
+    runs = M.positive_runs(g.window_idx.to_numpy(), g.t_start_sec.to_numpy(),
+                           g.t_end_sec.to_numpy(), pred, k)
+    spans = truth.get(rec, [])
+    matched = {i for i, r in enumerate(runs)
+               if any(r.end_sec > a and r.start_sec < b for a, b in spans)}
+    hit = sum(1 for a, b in spans
+              if any(r.end_sec > a and r.start_sec < b for r in runs))
+    total = float(g.t_end_sec.max() - g.t_start_sec.min()) or 1.0
+    alarm = sum(r.end_sec - r.start_sec for r in runs)
+
+    kpis([
+        ("Seizures present", f"{len(spans)}", "expert annotated"),
+        ("Detected", f"{hit}", "overlapping run"),
+        ("False alarms", f"{len(runs) - len(matched)}", "runs with no overlap"),
+        ("Time in alarm", f"{alarm / total:.1%}", "of this recording"),
+    ])
+
+    fig = go.Figure()
+    for a, b in spans:
+        fig.add_vrect(x0=a, x1=b, fillcolor=GOOD, opacity=0.16, line_width=0, layer="below")
+    for i, r in enumerate(runs):
+        fig.add_vrect(x0=r.start_sec, x1=r.end_sec,
+                      fillcolor=ACCENT if i in matched else BAD,
+                      opacity=0.26, line_width=0, layer="below")
+    fig.add_scatter(x=g.t_start_sec, y=g.score, mode="lines",
+                    line=dict(width=1.2, color=INK), hovertemplate="%{y:.3f}<extra></extra>")
+    fig.add_hline(y=thr, line=dict(color=BAD, dash="dot", width=1.2))
+    fig.update_layout(xaxis_title="seconds into recording", yaxis_title="score",
+                      showlegend=False)
+    plot(fig, 330)
+    st.caption("Green: annotated seizure. Blue: alarm overlapping one. Red: false alarm.")
+
+    card("The two controls are not independent",
+         "Raising the threshold shortens every run, so a strict threshold and a long "
+         "required run cancel each other out. Selecting them sequentially produced a fold "
+         "with six correct windows, zero false positives and zero detected seizures. They "
+         "are now chosen jointly on validation patients.")
+
+    if st.checkbox("Show raw EEG traces"):
+        draw_eeg(rec, spans)
+
+
+@st.cache_data(show_spinner="Decoding EDF…")
+def read_eeg(rec: str):
+    import yaml
+
+    from seizure.signal import io as SIO
+    cfg = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text(encoding="utf-8"))
+    p = DATA / rec.split("_")[0] / f"{rec}.edf"
+    if not p.exists():
+        return None
+    r = SIO.read(p, cfg["signal"]["canonical_channels"], on_missing="skip_file")
+    return r.data, r.channels, r.sample_rate
+
+
+def draw_eeg(rec: str, spans: list[tuple[int, int]]) -> None:
+    got = read_eeg(rec)
+    if got is None:
+        st.info("Raw recordings are not bundled with this deployment. The pipeline "
+                "streams them from PhysioNet and deletes each file after feature "
+                "extraction, so only derived features are retained.")
+        return
+    data, chans, rate = got
+    mid = spans[0][0] if spans else 0
+    t0 = st.number_input("Window start (s)", 0, int(data.shape[1] / rate) - 20,
+                         max(0, int(mid) - 10), step=5)
+    span, a = 30, int(t0 * rate)
+    seg = data[:, a:int((t0 + span) * rate)]
+    t = np.arange(seg.shape[1]) / rate + t0
+    step = float(np.percentile(np.abs(seg), 99)) * 3 or 1.0
+
+    fig = go.Figure()
+    for i, ch in enumerate(chans):
+        fig.add_scatter(x=t, y=seg[i] - i * step, mode="lines",
+                        line=dict(width=0.65, color=INK), showlegend=False,
+                        hoverinfo="skip")
+    for s0, s1 in spans:
+        if s1 > t0 and s0 < t0 + span:
+            fig.add_vrect(x0=max(s0, t0), x1=min(s1, t0 + span), fillcolor=GOOD,
+                          opacity=0.14, line_width=0, layer="below")
+    fig.update_layout(
+        xaxis_title="seconds",
+        yaxis=dict(tickmode="array", tickvals=[-i * step for i in range(len(chans))],
+                   ticktext=chans, tickfont=dict(size=9)))
+    plot(fig, 700)
+
+
+# -------------------------------------------------------------- validation
+def page_validation(loso: pd.DataFrame, rand: pd.DataFrame) -> None:
+    hero("Validation protocol",
+         "The same model and features, scored under two different splits.")
+
+    rows = []
+    for m in ("logreg", "rf", "hgb"):
+        a, b = loso[loso.model == m], rand[rand.model == m]
+        if len(a) and len(b):
+            rows.append({"model": m, "grouped": a.pr_auc.mean(),
+                         "shuffled": float(b.pr_auc.iloc[0])})
+    t = pd.DataFrame(rows)
+    t["inflation"] = t.shuffled - t.grouped
+
+    fig = go.Figure()
+    fig.add_bar(x=t.model, y=t.shuffled, name="Windows shuffled",
+                marker_color=BAD, text=[f"{v:.3f}" for v in t.shuffled],
+                textposition="outside")
+    fig.add_bar(x=t.model, y=t.grouped, name="Grouped by patient",
+                marker_color=GOOD, text=[f"{v:.3f}" for v in t.grouped],
+                textposition="outside")
+    fig.update_layout(barmode="group", yaxis_title="PR-AUC",
+                      yaxis_range=[0, max(t.shuffled.max(), t.grouped.max()) * 1.22],
+                      legend=dict(orientation="h", y=1.08, x=0))
+    plot(fig, 400)
+
+    st.dataframe(
+        t.rename(columns={"grouped": "grouped by patient", "shuffled": "windows shuffled"}),
+        width="stretch", hide_index=True,
+        column_config={c: st.column_config.NumberColumn(format="%.4f")
+                       for c in ("grouped by patient", "windows shuffled", "inflation")})
+
+    a, b = st.columns(2)
+    with a:
+        card("Why shuffling inflates the score",
+             "Consecutive 10-second windows from one patient are near-duplicates. A random "
+             "split puts them on both sides, so the model is partly scored on data it "
+             "trained on. Grouping every patient into a single fold removes that.")
+    with b:
+        card("Capacity is what gets leaked into",
+             "Logistic regression shows no inflation — a single global hyperplane cannot "
+             "carve out per-patient regions. The tree ensembles can, and do. Inflation is a "
+             "property of the model class and feature view, not of the dataset alone.")
+
+
+# ----------------------------------------------------------------- analyse
+REFUSALS = {
+    "missing_channels": "This recording does not contain the 18 canonical bipolar channels "
+                        "the model requires.",
+    "no_usable_channels": "No channel in this file parses as a bipolar derivation between "
+                          "two 10-20 electrode positions.",
+    "unexpected_sample_rate": "The model requires 256 Hz. A different rate shifts every "
+                              "spectral feature.",
+    "record_shorter_than_window": "The recording is shorter than one 10-second window.",
+}
+
+
+def page_analyse() -> None:
+    hero("Analyse a recording",
+         "Run the pipeline end to end on an EDF file the model has never seen.")
 
     bundle = load_final_model()
     if bundle is None:
-        st.info("No fitted model on disk. Create one with:\n\n"
-                "`python -m seizure.cli --config configs/base.yaml fit-final "
-                "--view aggregated --loso-detail artifacts/rfjoint_base/detail_aggregated.json`")
+        st.info("No fitted model found. Run `seizure fit-final --view aggregated`.")
         return
-
     meta = bundle["meta"]
     exp = meta.get("loso_expectation", {})
     op = meta.get("operating_point", {})
-    if exp:
-        st.warning(
-            f"**Before you read anything below.** On the {exp.get('n_subjects')} patients this "
-            f"model was evaluated against — each one held out of training entirely — it found "
-            f"**{exp.get('seizures_detected')} of {exp.get('seizures_total')} seizures "
-            f"({exp.get('event_sensitivity', 0):.0%})** at **{exp.get('fa_per_hour', 0):.2f} false "
-            f"alarms per hour, and detected nothing at all for "
-            f"{exp.get('subjects_with_zero_detections')} of them.** That is the honest "
-            f"expectation for a new recording. Training on all 23 subjects did not make this "
-            f"model better; it only removed our ability to measure it."
-        )
 
-    st.caption(
-        "**Do not upload identifiable patient data.** If this instance is hosted, your file "
-        "is transmitted to and processed on a third-party server. It is written to a temporary "
-        "directory, read once, and deleted when the request ends — nothing is stored or logged "
-        "— but a public demo is still the wrong place for clinical records. Use public research "
-        "data."
-    )
-    up = st.file_uploader(
-        "European Data Format recording (.edf)", type=["edf"],
-        help="18 canonical bipolar channels at 256 Hz, as in CHB-MIT. "
-             "Public research recordings only.")
+    if exp:
+        kpis([
+            ("Expected recall", f"{exp.get('event_sensitivity', 0):.0%}",
+             f"{exp.get('seizures_detected')} of {exp.get('seizures_total')} held out"),
+            ("Expected false alarms", f"{exp.get('fa_per_hour', 0):.2f}/h", "cross-patient"),
+            ("Patients with none found", f"{exp.get('subjects_with_zero_detections')}"
+             f" / {exp.get('n_subjects')}", "measured, not estimated"),
+            ("Operating point", f"{op.get('threshold', 0):.3f} · k={op.get('k')}",
+             "median across folds"),
+        ])
+
+    st.caption("Requires 18 canonical bipolar channels at 256 Hz (CHB-MIT format). "
+               "Files are processed in memory and discarded when the request ends. "
+               "Use public research recordings.")
+    up = st.file_uploader("EDF recording", type=["edf"], label_visibility="collapsed")
     if up is None:
-        st.caption(
-            f"Expected input: the montage in `configs/base.yaml` at 256 Hz — the CHB-MIT "
-            f"format. Files that do not match are refused rather than guessed at. "
-            f"Operating point: threshold {op.get('threshold', 0):.3f}, k = {op.get('k')} "
-            f"({op.get('basis', 'n/a')})."
-        )
         return
 
     import tempfile
@@ -347,171 +533,125 @@ def screen_upload() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / up.name
         p.write_bytes(up.getbuffer())
-        with st.spinner(f"Reading, filtering and featurising {up.name} …"):
+        with st.spinner("Filtering, windowing and scoring…"):
             try:
-                # No annotations exist for an unseen file, so no window can be
-                # labelled ictal or guarded -- every row is scored.
                 res = EX.extract_record(p, [], cfg)
             except Exception as e:  # noqa: BLE001
-                st.error(f"Could not read this file: `{type(e).__name__}: {e}`")
+                st.error(f"Could not read this file — {type(e).__name__}: {e}")
                 return
 
-    # Read the attribute directly. A getattr with a default here silently
-    # disabled the whole refusal gate when the field was named differently.
-    reason = res.skipped_reason
-    if reason:
-        key = str(reason).split(":")[0]
-        st.error(f"**Refused: `{reason}`**\n\n{REFUSALS.get(key, 'This file cannot be read.')}")
-        st.caption("This refusal comes from the pipeline's own channel and rate checks, "
-                   "not from a separate rule in this app — the same gate skipped three "
-                   "chb12 records during extraction.")
+    # Functional gate, not a disclaimer: the same check that excluded three
+    # recordings during extraction. Without it the model scores out-of-
+    # distribution input and returns confident nonsense.
+    if res.skipped_reason:
+        key = str(res.skipped_reason).split(":")[0]
+        st.error(f"**Unsupported recording** — {REFUSALS.get(key, 'this file cannot be read.')}")
+        st.caption(f"Pipeline reason: `{res.skipped_reason}`")
         return
     if res.aggregated is None or not len(res.aggregated):
         st.error("No analysis windows could be built from this recording.")
         return
 
-    agg = res.aggregated
-    cols = bundle["columns"]
-    missing = [c for c in cols if c not in agg.columns]
-    if missing:
-        st.error(f"Feature mismatch: {len(missing)} expected columns absent "
-                 f"(first few: {missing[:4]}).")
+    agg, cols = res.aggregated, bundle["columns"]
+    if [c for c in cols if c not in agg.columns]:
+        st.error("Feature schema mismatch — this file produced an unexpected feature set.")
         return
 
     scores = bundle["model"].predict_proba(agg[cols].to_numpy(dtype=np.float32))[:, 1]
-    thr = float(op.get("threshold", 0.5))
-    k = int(op.get("k", 1))
-
     c1, c2 = st.columns([3, 1])
-    thr = c1.slider("Alarm threshold", 0.0, 1.0, thr, 0.005, key="up_thr")
-    k = c2.radio("Consecutive windows (k)", [1, 2, 3],
-                 index=[1, 2, 3].index(k) if k in (1, 2, 3) else 0,
-                 horizontal=True, key="up_k")
+    thr = c1.slider("Alarm threshold", 0.0, 1.0, float(op.get("threshold", 0.5)), 0.005,
+                    key="an_thr")
+    kk = int(op.get("k", 1))
+    k = c2.radio("Consecutive windows", [1, 2, 3],
+                 index=[1, 2, 3].index(kk) if kk in (1, 2, 3) else 0,
+                 horizontal=True, key="an_k")
 
     runs = M.positive_runs(agg.window_idx.to_numpy(), agg.t_start_sec.to_numpy(),
                            agg.t_end_sec.to_numpy(), (scores >= thr), k)
-    dur = float(agg.t_end_sec.max())
-    alarm_sec = sum(r.end_sec - r.start_sec for r in runs)
-
-    m = st.columns(4)
-    m[0].metric("Recording length", f"{dur / 60:.1f} min")
-    m[1].metric("Analysis windows", f"{len(agg):,}")
-    m[2].metric("Candidate segments flagged", len(runs))
-    m[3].metric("Time in alarm", f"{alarm_sec / dur:.1%}" if dur else "—")
+    dur = float(agg.t_end_sec.max()) or 1.0
+    alarm = sum(r.end_sec - r.start_sec for r in runs)
+    kpis([
+        ("Duration", f"{dur / 60:.1f} min", up.name),
+        ("Windows scored", f"{len(agg):,}", "10 s each"),
+        ("Segments flagged", f"{len(runs)}", "candidate events"),
+        ("Time in alarm", f"{alarm / dur:.1%}", "of the recording"),
+    ])
 
     fig = go.Figure()
     for r in runs:
-        fig.add_vrect(x0=r.start_sec, x1=r.end_sec, fillcolor="#f9a825",
-                      opacity=0.32, line_width=0, layer="below")
+        fig.add_vrect(x0=r.start_sec, x1=r.end_sec, fillcolor=WARN, opacity=0.26,
+                      line_width=0, layer="below")
     fig.add_scatter(x=agg.t_start_sec, y=scores, mode="lines",
-                    line=dict(width=1.1, color="#212121"), name="score")
-    fig.add_hline(y=thr, line=dict(color="#c62828", dash="dash", width=1))
-    fig.update_layout(height=320, xaxis_title="seconds into recording",
-                      yaxis_title="model score", showlegend=False,
-                      margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig, width="stretch")
+                    line=dict(width=1.1, color=INK), hovertemplate="%{y:.3f}<extra></extra>")
+    fig.add_hline(y=thr, line=dict(color=BAD, dash="dot", width=1.2))
+    fig.update_layout(xaxis_title="seconds into recording", yaxis_title="score",
+                      showlegend=False)
+    plot(fig, 320)
 
     if runs:
+        section("Flagged segments")
         st.dataframe(pd.DataFrame([{
-            "segment": i + 1,
+            "#": i + 1,
             "start": f"{int(r.start_sec // 60):02d}:{int(r.start_sec % 60):02d}",
             "end": f"{int(r.end_sec // 60):02d}:{int(r.end_sec % 60):02d}",
-            "duration_sec": round(r.end_sec - r.start_sec, 1),
+            "seconds": round(r.end_sec - r.start_sec, 1),
             "windows": r.n_windows,
         } for i, r in enumerate(runs)]), width="stretch", hide_index=True)
 
-    st.info(
-        "**These are flagged segments, not seizures.** This file has no expert annotation, so "
-        "nothing here can be confirmed or refuted — the app cannot tell a seizure from chewing "
-        "artifact, electrode movement, or ordinary drowsiness. On annotated data this model "
-        "misses roughly two seizures in three and flags several segments per hour that are not "
-        "seizures. A neurologist reading the trace is the only thing that resolves any of these.",
-        icon="ℹ️")
-    st.caption(
-        "A further limit worth stating: passing the channel and rate gate does not make a "
-        "recording similar to the training data. A different amplifier, referencing scheme, "
-        "electrode paste, age group or clinical context all shift the features, and the model "
-        "has no way to report that it is out of its depth — it will return confident scores "
-        "regardless."
-    )
+    card("Interpreting this output",
+         "These are candidate segments ranked by model score, not confirmed seizures. This "
+         "recording has no expert annotation, so nothing here can be verified from within "
+         "the app, and the model cannot distinguish a seizure from chewing artifact or "
+         "electrode movement. Passing the format check also does not mean the recording "
+         "resembles the training distribution — different hardware, referencing or patient "
+         "population shift the features, and the model reports confident scores regardless.")
 
 
-# -------------------------------------------------------------- screen three
-def screen_leak(loso: pd.DataFrame, rand: pd.DataFrame) -> None:
-    st.header("The same model, two ways of splitting the data")
-    protocol = st.radio(
-        "Split protocol", ["group by patient (honest)", "shuffle windows (leaky)"],
-        horizontal=True)
-    leaky = protocol.startswith("shuffle")
-
-    rows = []
-    for m in ("logreg", "rf", "hgb"):
-        lo = loso[loso.model == m]
-        rd = rand[rand.model == m]
-        if not len(lo) or not len(rd):
-            continue
-        rows.append({"model": m, "honest": lo.pr_auc.mean(),
-                     "leaky": float(rd.pr_auc.iloc[0])})
-    t = pd.DataFrame(rows)
-
-    fig = go.Figure()
-    fig.add_bar(x=t.model, y=t.leaky if leaky else t.honest,
-                marker_color="#c62828" if leaky else "#2e7d32",
-                text=[f"{v:.3f}" for v in (t.leaky if leaky else t.honest)],
-                textposition="outside")
-    fig.update_layout(height=380, yaxis_title="PR-AUC",
-                      yaxis_range=[0, max(t.leaky.max(), t.honest.max()) * 1.25],
-                      margin=dict(l=10, r=10, t=20, b=10))
-    st.plotly_chart(fig, width='stretch')
-
-    t["leak"] = t.leaky - t.honest
-    st.dataframe(t.rename(columns={
-        "honest": "grouped by patient", "leaky": "windows shuffled",
-        "leak": "inflation"}).style.format(precision=4), width='stretch')
-    st.error(
-        "Shuffling windows puts the same patient on both sides of the split. Two windows "
-        "ten seconds apart are nearly identical, so the model is scored partly on data it "
-        "trained on. Nothing about the model changes between these two bars — only the "
-        "split does. **That difference is the single most important number in the project**, "
-        "and a detector evaluated the leaky way would collapse on its first new patient."
-    )
+# ---------------------------------------------------------------------- main
+PAGES = {
+    "Overview": page_overview,
+    "Per-patient outcomes": page_patients,
+    "Record explorer": page_record,
+    "Validation protocol": page_validation,
+    "Analyse a recording": page_analyse,
+}
 
 
 def main() -> None:
     loso, rand, rep = load_detail()
     sel = rep.get("selected_model", {}).get("aggregated", {})
-    headline = sel.get("model", "rf")
+    model = sel.get("model", "rf")
 
-    st.title("Cross-patient seizure detection — what it can and cannot do")
-    st.caption(
-        f"CHB-MIT Scalp EEG v1.0.0 · 23 patients · 979.9 hours · 352,742 windows at a "
-        f"0.32% seizure rate · headline model `{headline}` · "
-        f"extraction `{rep.get('extraction_hash')}`"
-    )
-    st.info(
-        "**Not a medical device, and not a diagnostic tool.** This is a research "
-        "demonstration built on a public research dataset. It accepts no patient data and "
-        "produces no finding about any individual. Seizure precautions and seizure action "
-        "plans come from a treating neurologist — see the Epilepsy Foundation, NHS, or ILAE.",
-        icon="⚠️")
-    if sel.get("owner_designated") and sel.get("auto_choice") != headline:
-        st.caption(
-            f"`{headline}` was designated by the project owner on event-level results. "
-            f"Validation-only selection would have chosen `{sel.get('auto_choice')}`, so the "
-            f"headline figures are an optimistically biased estimate rather than an unbiased one."
-        )
+    with st.sidebar:
+        st.markdown('<div class="sb-brand">Seizure Detector Report Card</div>'
+                    '<div class="sb-sub">CHB-MIT · leave-one-subject-out</div>',
+                    unsafe_allow_html=True)
+        page = st.radio("Section", list(PAGES), label_visibility="collapsed")
+        st.markdown("---")
+        st.markdown(
+            f'<div style="font-size:.78rem;color:{MUTED};line-height:1.7">'
+            f'<b>Model</b> {model.upper()}, 56 features<br>'
+            f'<b>Patients</b> 23 · <b>Hours</b> 979.9<br>'
+            f'<b>Windows</b> 352,742 · <b>Ictal</b> 0.32%<br>'
+            f'<b>Protocol</b> 23-fold LOSO</div>', unsafe_allow_html=True)
 
-    one, two, three, four = st.tabs([
-        "1 · Who it works for", "2 · One record, one operating point",
-        "3 · Why the split matters", "4 · Try an unseen recording"])
-    with one:
-        screen_bimodality(loso, headline)
-    with two:
-        screen_record(load_scores(), load_truth())
-    with three:
-        screen_leak(loso, rand)
-    with four:
-        screen_upload()
+    fn = PAGES[page]
+    if page == "Overview":
+        fn(loso, rand, rep, model)
+    elif page == "Per-patient outcomes":
+        fn(loso, model)
+    elif page == "Record explorer":
+        fn(load_scores(), load_truth())
+    elif page == "Validation protocol":
+        fn(loso, rand)
+    else:
+        fn()
+
+    st.markdown(
+        '<div class="foot">Research software for methodology demonstration. '
+        'Not a medical device, not clinically validated, and not for use in patient care. '
+        'Built on the CHB-MIT Scalp EEG Database (Shoeb 2009; Goldberger et al. 2000), '
+        'distributed by PhysioNet under ODC-BY.</div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

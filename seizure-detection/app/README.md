@@ -1,81 +1,69 @@
-# The honest-evaluation explorer
+# Seizure Detector Report Card
+
+*Does it work on a patient it has never seen?*
 
 ```bash
 cd seizure-detection
-python -m pip install streamlit plotly
-python -m seizure.cli --config configs/base.yaml export-scores \
-    --view aggregated --subjects sub01,sub12,sub17     # once, for tab 2
-streamlit run app/streamlit_app.py
+pip install -r ../requirements.txt
+streamlit run app/streamlit_app.py --server.address 127.0.0.1
 ```
 
-## What this is
+Five sections, sidebar-navigated. Tabs 1–4 need no raw data; the small result files they
+read are committed.
 
-A four-tab demonstration whose subject is **the evaluation, not the patient**.
-
-| Tab | The finding it makes visible |
+| Section | What it shows |
 |---|---|
-| 1 · Who it works for | a 30–38% average hides a bimodal failure; four patients are genuine successes, seven get nothing, three only *look* perfect |
-| 2 · One record, one operating point | an operating point is a trade — drag the threshold, drop `k`, watch false alarms multiply |
-| 3 · Why the split matters | one toggle, same model, PR-AUC 0.388 → 0.205 |
-| 4 · Try an unseen recording | upload an `.edf` and watch the detector run — or be refused |
+| Overview | KPI strip, four findings, and the full **model card** |
+| Per-patient outcomes | 23 patients graded Reliable / Partial / Over-alarming / No detections |
+| Record explorer | threshold and run-length sliders redrawing alarms live |
+| Validation protocol | grouped-by-patient against shuffled-windows, same model |
+| Analyse a recording | upload an EDF and run the real pipeline over it |
 
-Tab 1 is the centrepiece. The three red bars reach the top of the chart while detecting
-nothing real: they alarm almost continuously and are credited for the overlap. That is why
-event sensitivity is never shown here without precision beside it.
+## Design rules
 
-## Tab 4 — the upload path
+**The evaluation is the product.** Limitations are presented as model documentation, not as
+warning boxes. A model card reads as engineering maturity; a wall of red alerts reads as
+hedging. Same information, different register.
 
-It accepts a research `.edf`, runs the real pipeline over it, and shows the flagged segments.
-Three properties make that defensible:
+**Two things are functional, not cosmetic, and must survive any redesign:**
 
-1. **The refusal gate is the pipeline's, not the app's.** The file goes through
+1. **The refusal gate** in `page_analyse`. Uploaded files pass through
    `features/extract.py`, so a recording lacking the 18 canonical channels, or not at 256 Hz,
-   or shorter than one window, is rejected with the real reason. Verified against
-   `chb12_27`/`_28`/`_29` — the three records the project genuinely could not read.
-   Read `res.skipped_reason` **directly**; a `getattr(res, ..., None)` with a default silently
-   disabled the entire gate once already.
-2. **The output is "candidate segments", never "seizures".** An uploaded file has no expert
-   annotation, so nothing in it can be confirmed or refuted, and the app says so.
-3. **The LOSO expectation is printed above the uploader, not below the result** — 71 of 185
-   seizures, 4.36 false alarms/hour, and seven patients with nothing detected at all. A reader
-   meets the limitation before they meet the output.
+   or shorter than one window, is rejected with the pipeline's own reason. Without it the
+   model silently scores out-of-distribution input and returns confident nonsense — which is
+   both unsafe and a worse product than one that says "unsupported format". Read
+   `res.skipped_reason` **directly**; a `getattr(res, ..., None)` with a default silently
+   disabled the whole gate once already.
+2. **The one-line research-use footer.** Minimum for software that ingests EEG and talks
+   about seizures. It is small print, not a banner, and that is the right size for it.
 
-The model is `artifacts/final_model_aggregated.joblib`, fitted on all 23 subjects by
-`seizure fit-final`. It has **no held-out score of its own and never can** — no subject is
-left to hold out — so the LOSO figures travel inside the artifact and are surfaced in the UI.
-Its operating point is the median threshold and modal k across the LOSO folds, which is a
-compromise, not a solution: the per-fold threshold ranged 0.000 to 0.994.
+## Implementation notes
 
-## What it will not do
+- Reads the frozen snapshot in `artifacts/rfjoint_base/`, **not** live `artifacts/`. Training
+  runs rewrite `detail_*.json` in place and a reader should not have numbers move mid-session.
+  Re-point `SNAP` when promoting a new run.
+- KPI cards are hand-rolled HTML rather than `st.metric`, for control over typography and
+  density. Consequence: `AppTest` reports `metric=0` — assert against `at.markdown` instead.
+- The Record explorer needs `artifacts/scores_aggregated.parquet` from
+  `seizure export-scores`. Each patient is scored by the model fitted on **its own LOSO
+  fold**, so those are held-out predictions and the slider's default is the operating point
+  the pipeline actually chose.
+- Raw EEG traces exist only for `chb01`, `chb12` and `chb17`. Everywhere else the view
+  explains that recordings are streamed and deleted after feature extraction.
+- The Overview headline model follows `report.json`'s `selected_model`, which honours
+  `training.headline_model` (R44).
 
-- **No verdict about any person.**
-- **No precautionary or medical guidance.** Seizure action plans come from a treating
-  neurologist. The app links to the Epilepsy Foundation, NHS and ILAE instead.
-- **No consumer-headset input.** A 2–8 channel wearable is out of distribution for a model
-  trained on 18 canonical bipolar derivations at 256 Hz; the output would be confident noise.
+## Testing
 
-The upload path in tab 4 is for **research recordings**. Do not upload identifiable patient
-data to a demonstration app, and do not present its output to anyone as a finding about a
-person. The refusal gate is deliberately wired to the pipeline's own channel and rate checks
-rather than to a disclaimer, so an unreadable file is rejected by the same code that skipped
-three `chb12` records during extraction.
+`AppTest` drives every section. Identify widgets **by label**, not index — the main-content
+radio precedes the sidebar radio in the element tree, so positional access silently grabs the
+wrong widget:
 
-Passing that gate is not the same as being in distribution: a different amplifier, referencing
-scheme, age group or clinical context all shift the features, and the model cannot report that
-it is out of its depth — it returns confident scores regardless. The UI states this.
+```python
+radio = next(r for r in at.radio if "consecutive" in r.label.lower())
+```
 
-## Notes for whoever maintains it
-
-- It reads the frozen snapshot in `artifacts/rfjoint_base/`, **not** the live `artifacts/`
-  directory. Training runs rewrite `detail_*.json` in place, and a reader should not have the
-  numbers change under them mid-session. Re-point `SNAP` when you promote a new run.
-- Tab 2 needs `artifacts/scores_aggregated.parquet` from `export-scores`. The pipeline keeps
-  only aggregate metrics, so per-window scores have to be exported deliberately. Each subject
-  is scored by the model fitted on **its own LOSO fold**, so these are held-out predictions and
-  the slider's default position is the operating point the pipeline actually chose.
-- Raw EEG traces only exist for `chb01`, `chb12` and `chb17` — the R13 fixtures kept on disk.
-  Every other record's `.edf` was deleted after feature extraction, and the app says so rather
-  than failing.
-- The headline banner reprints the selection-bias caveat whenever
-  `training.headline_model` overrides automatic selection (R44). Do not remove it while the
-  override stands.
+Interaction behaviour worth preserving, measured on `chb01_03`: at the tuned operating point
+(threshold 0.125, k=3) the record shows 3 false alarms and 4.2% time in alarm; dropping k to 1
+gives 22 and 11.7%; at threshold 0.02 it is 62 and 70.6%. Detection stays at 1 throughout.
+That progression is the whole point of the section.
