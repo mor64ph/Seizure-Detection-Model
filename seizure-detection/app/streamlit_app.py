@@ -24,6 +24,7 @@ Two things here are functional, not decorative:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -141,6 +142,18 @@ BUNDLED_SAMPLES = {
     },
 }
 
+# EDF stores int16; mne preloads float64, so decoding costs ~4x the file size
+# and the raw bytes are resident too -- call it 5x peak. Streamlit Community
+# Cloud's free tier is ~1 GB, and roughly 300 MB of that is already spoken for
+# by Python, the model and Streamlit itself. Estimating this before decoding
+# turns "the app died" into "this file is too large, and here is why".
+MAX_DECODE_MB = float(os.environ.get("SEIZURE_MAX_DECODE_MB", "700"))
+DECODE_MULTIPLIER = 5.0
+# The stored montage for the raw-trace view is bounded rather than a fixed
+# decimation: at a fixed 64 Hz a six-hour upload would add 100 MB of its own.
+DISPLAY_BUDGET_MB = 40.0
+DISPLAY_MIN_HZ = 16.0
+
 REFUSALS = {
     "missing_channels": "This recording does not contain the 18 canonical bipolar "
                         "channels the model requires.",
@@ -152,6 +165,8 @@ REFUSALS = {
     "unreadable": "This file could not be decoded as EDF.",
     "no_windows": "No analysis windows could be built from this recording.",
     "schema_mismatch": "This recording produced an unexpected feature set.",
+    "too_large": "This recording is too large to decode in the memory available "
+                 "to this instance.",
 }
 
 
@@ -192,6 +207,15 @@ def analyse(raw: bytes, filename: str) -> dict:
     from seizure.features import extract as EX
     cfg = load_cfg()
     bundle = load_model()
+
+    file_mb = len(raw) / 1024 / 1024
+    need_mb = file_mb * DECODE_MULTIPLIER
+    if need_mb > MAX_DECODE_MB:
+        return {"ok": False, "name": filename,
+                "reason": (f"too_large:{file_mb:.0f} MB needs about "
+                           f"{need_mb:.0f} MB to decode, limit "
+                           f"{MAX_DECODE_MB:.0f} MB")}
+
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / filename
         p.write_bytes(raw)
@@ -205,9 +229,16 @@ def analyse(raw: bytes, filename: str) -> dict:
             from seizure.signal import io as SIO
             try:
                 rec = SIO.read(p, list(cfg.signal.canonical_channels), "skip_file")
-                # Store at 64 Hz: enough to draw a montage, a sixteenth of the
-                # memory of the 256 Hz original.
-                signal = (rec.data[:, ::4].astype(np.float32), rec.channels, 64.0)
+                # Decimate to fit a fixed byte budget rather than to a fixed
+                # rate, so a long recording costs the same as a short one.
+                full_mb = rec.data.size * 4 / 1024 / 1024
+                step = max(4, int(np.ceil(full_mb / DISPLAY_BUDGET_MB)))
+                rate = rec.sample_rate / step
+                if rate < DISPLAY_MIN_HZ:
+                    signal = None  # too coarse to be worth drawing
+                else:
+                    signal = (rec.data[:, ::step].astype(np.float32),
+                              rec.channels, rate)
             except Exception:  # noqa: BLE001
                 signal = None
 
@@ -351,7 +382,10 @@ def page_analyse() -> None:
 
     if not a["ok"]:
         key = a["reason"].split(":")[0]
-        st.error(f"**Unsupported recording** — "
+        heading = {"too_large": "Recording too large",
+                   "unreadable": "Could not read this file"}.get(
+            key, "Unsupported recording")
+        st.error(f"**{heading}** — "
                  f"{REFUSALS.get(key, 'this file cannot be read.')}")
         st.caption(f"Pipeline reason: `{a['reason']}`")
         model_card()
@@ -548,8 +582,8 @@ def page_signal() -> None:
                        tickvals=[-i * step for i in range(len(chans))],
                        ticktext=chans, tickfont=dict(size=9)))
         plot(fig, 700)
-        st.caption("Displayed at 64 Hz to keep the page responsive; the model scored the "
-                   "full 256 Hz signal.")
+        st.caption(f"Displayed at {rate:.0f} Hz to bound memory and keep the page "
+                   f"responsive; the model scored the full 256 Hz signal.")
 
 
 # ------------------------------------------------------------------- page 3

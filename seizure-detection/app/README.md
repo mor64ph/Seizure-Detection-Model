@@ -56,6 +56,28 @@ annotation-dependent output on `a["recognised"]`, never on a non-empty `truth` l
   Streamlit reads `$CWD/.streamlit/config.toml` and Cloud runs from the root regardless of
   where the entrypoint sits. Misplaced, they are ignored silently.
 
+## Upload size is limited by RAM, not by the config number
+
+`maxUploadSize = 200` in the root `.streamlit/config.toml`, but that number is not the real
+constraint. EDF stores int16 and mne preloads float64, so decoding costs ~4x the file size
+with the raw bytes resident too — about **5x peak**:
+
+| file | hours (18 ch) | peak decode |
+|---|---|---|
+| 51 MB (one CHB-MIT record) | 1.6 | ~255 MB |
+| 120 MB | 3.8 | ~600 MB |
+| 200 MB | 6.3 | **~1000 MB** |
+
+Streamlit Community Cloud's free tier is ~1 GB, with roughly 300 MB already taken by Python,
+the model and Streamlit. So `analyse()` estimates the peak **before** decoding and refuses with
+the arithmetic shown, because an OOM kill surfaces to a visitor as an unexplained connection
+error. Raise `SEIZURE_MAX_DECODE_MB` (default 700) when hosting somewhere larger.
+
+The stored montage for the raw-trace view is decimated to a **byte budget**
+(`DISPLAY_BUDGET_MB = 40`), not to a fixed rate — at a fixed 64 Hz a six-hour upload would add
+100 MB of its own. A one-hour file displays at 64 Hz, six hours at ~26 Hz, and below 16 Hz the
+trace is dropped as too coarse to be worth drawing.
+
 ## Performance
 
 `analyse()` is cached on the file bytes, so re-selecting a file is free and the result

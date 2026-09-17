@@ -4,10 +4,14 @@
 # the app shipped with the default dark theme and the 200 MB upload cap.
 
 [server]
-# A one-hour CHB-MIT record is about 51 MB, so the 200 MB default is already
-# generous. Capping it lower keeps a hosted instance from being used as file
-# storage, and an oversized upload fails fast instead of after a long transfer.
-maxUploadSize = 120
+# A one-hour CHB-MIT record is ~51 MB, so 200 MB accepts any single record with
+# room to spare. Note that the binding constraint is RAM, not this number: EDF
+# is int16 on disk and mne preloads float64, so decoding costs 4x the file size
+# and a 200 MB upload peaks near 1 GB. The app estimates that before decoding
+# and refuses with an explanation rather than being OOM-killed, which would
+# surface to a visitor as an unexplained connection error. Raise
+# SEIZURE_MAX_DECODE_MB when running somewhere with more memory.
+maxUploadSize = 200
 enableXsrfProtection = true
 
 [browser]
