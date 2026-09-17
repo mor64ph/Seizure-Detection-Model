@@ -1,0 +1,73 @@
+# Canonical channels frozen from the R30 header pre-pass over all 686 files.
+#
+# The pre-pass found two tiers: 18 labels present in 99.6% of files, and 4 more
+# (the FT9/FT10 temporal chain) present in 95.5%. PRD §7.2's >=95% rule would
+# admit all 22, but measured against skip_file that costs 31 files instead of 3.
+# The 18-label set is therefore frozen here, and the reason is recorded in
+# docs/data-notes.md. R16 makes this a projection, so revisiting it is a
+# re-projection rather than a re-download.
+data:
+  root: ./data/chbmit
+  source: chbmit_raw
+  cases: all
+  on_missing_channel: skip_file
+  dedupe: true
+
+signal:
+  sample_rate: 256
+  notch_hz: [60.0, 120.0]
+  bandpass: [0.5, 80.0]
+  canonical_channels:
+    - FP1-F7
+    - F7-T7
+    - T7-P7
+    - P7-O1
+    - FP1-F3
+    - F3-C3
+    - C3-P3
+    - P3-O1
+    - FP2-F4
+    - F4-C4
+    - C4-P4
+    - P4-O2
+    - FP2-F8
+    - F8-T8
+    - T8-P8
+    - P8-O2
+    - FZ-CZ
+    - CZ-PZ
+
+windowing:
+  length_sec: 10.0
+  stride_sec: 10.0
+  min_overlap_frac: 0.5
+  guard_sec: 30
+
+features:
+  bands:
+    delta: [0.5, 4.0]
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta: [13.0, 30.0]
+    gamma: [30.0, 80.0]
+  welch_nperseg: 512
+  welch_noverlap: 256
+  views: [per_channel, aggregated]
+
+splits:
+  protocol: loso
+  n_val_subjects: 4
+  seed: 42
+
+training:
+  models: [dummy, logreg, rf, hgb]
+  negative_downsample_ratio: 10
+  threshold_metric: f2
+  consecutive_k: [1, 2, 3]
+  # Owner decision 2026-09-17 (R44): joint (threshold, k) selection, rf headline.
+  joint_threshold_k: true
+  headline_model: rf
+  feature_subset: amplitude_invariant
+
+tracking:
+  local_artifacts: ./artifacts

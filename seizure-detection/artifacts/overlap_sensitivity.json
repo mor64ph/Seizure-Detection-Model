@@ -1,0 +1,54 @@
+[
+  {
+    "min_overlap_frac": 0.1,
+    "n_positive": 1276,
+    "n_windows": 168201,
+    "n_guard": 1142,
+    "positive_rate": 0.0075861617945196524,
+    "model": "logreg",
+    "folds": 23,
+    "pr_auc": 0.1794740768872371,
+    "recall": 0.2791931517833004,
+    "precision": 0.1968601849728665,
+    "event_sensitivity": 0.2864864864864865
+  },
+  {
+    "min_overlap_frac": 0.25,
+    "n_positive": 1201,
+    "n_windows": 168126,
+    "n_guard": 1217,
+    "positive_rate": 0.00714345193485838,
+    "model": "logreg",
+    "folds": 23,
+    "pr_auc": 0.1967214061552065,
+    "recall": 0.27990408103234815,
+    "precision": 0.214737385164005,
+    "event_sensitivity": 0.2918918918918919
+  },
+  {
+    "min_overlap_frac": 0.5,
+    "n_positive": 1133,
+    "n_windows": 168058,
+    "n_guard": 1285,
+    "positive_rate": 0.006741720120434612,
+    "model": "logreg",
+    "folds": 23,
+    "pr_auc": 0.20615145986653188,
+    "recall": 0.29590164557595877,
+    "precision": 0.219595616977168,
+    "event_sensitivity": 0.2864864864864865
+  },
+  {
+    "min_overlap_frac": 0.75,
+    "n_positive": 1022,
+    "n_windows": 168058,
+    "n_guard": 1285,
+    "positive_rate": 0.0060812338597389,
+    "model": "logreg",
+    "folds": 23,
+    "pr_auc": 0.21073335083771216,
+    "recall": 0.3079251121822481,
+    "precision": 0.22648749549266575,
+    "event_sensitivity": 0.2918918918918919
+  }
+]

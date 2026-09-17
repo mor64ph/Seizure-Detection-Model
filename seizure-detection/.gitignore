@@ -1,0 +1,20 @@
+data/
+build/
+
+# Artifact bulk stays out (features, run logs, the fitted estimator -- see the
+# root .gitignore for why). The small result files are committed on purpose:
+# they are the project's findings, the README and the app cite them, and they
+# are the only way a reader checks a quoted number without a 45 GB download.
+artifacts/*
+!artifacts/*.json
+!artifacts/*.md
+!artifacts/scores_aggregated.parquet
+!artifacts/rfjoint_base/
+!artifacts/experiments/
+!artifacts/final_full_baseline/
+!artifacts/baseline_sequential/
+!artifacts/search_on_full/
+
+__pycache__/
+*.pyc
+.pytest_cache/

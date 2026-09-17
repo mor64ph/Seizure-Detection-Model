@@ -1,0 +1,16 @@
+{
+  "n_from_summary": 198,
+  "n_from_annotations": 198,
+  "n_records_summary": 141,
+  "n_records_annotations": 141,
+  "parser_anomalies": [
+    {
+      "record_id": "chb09_08",
+      "anomaly": "index mismatch: start labelled 2, end labelled 1; paired positionally as seizure 2"
+    }
+  ],
+  "source_disagreements": [
+    "chb24_21 seizure 1: summary 2804-2872s vs annotation 2404-2872s"
+  ],
+  "n_original_23": 182
+}
