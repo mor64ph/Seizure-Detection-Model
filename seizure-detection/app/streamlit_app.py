@@ -320,10 +320,17 @@ def screen_upload() -> None:
             f"model better; it only removed our ability to measure it."
         )
 
+    st.caption(
+        "**Do not upload identifiable patient data.** If this instance is hosted, your file "
+        "is transmitted to and processed on a third-party server. It is written to a temporary "
+        "directory, read once, and deleted when the request ends — nothing is stored or logged "
+        "— but a public demo is still the wrong place for clinical records. Use public research "
+        "data."
+    )
     up = st.file_uploader(
         "European Data Format recording (.edf)", type=["edf"],
-        help="18 canonical bipolar channels at 256 Hz. Research recordings only — "
-             "do not upload identifiable patient data to a demo.")
+        help="18 canonical bipolar channels at 256 Hz, as in CHB-MIT. "
+             "Public research recordings only.")
     if up is None:
         st.caption(
             f"Expected input: the montage in `configs/base.yaml` at 256 Hz — the CHB-MIT "

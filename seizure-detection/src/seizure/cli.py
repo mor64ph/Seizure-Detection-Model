@@ -319,7 +319,10 @@ def cmd_fit_final(args) -> int:
             }
     meta["feature_columns"] = cols
     dest = art / f"final_model_{args.view}.joblib"
-    joblib.dump({"model": model, "columns": cols, "meta": meta}, dest)
+    # compress=3 takes the forest from 29.7 MB to 8.56 MB and still loads in
+    # 0.5 s, which is what makes the artifact small enough to commit and so
+    # small enough to deploy without a separate model-hosting step.
+    joblib.dump({"model": model, "columns": cols, "meta": meta}, dest, compress=3)
     (art / f"final_model_{args.view}.json").write_text(
         json.dumps(meta, indent=2, default=str), encoding="utf-8")
     op = meta.get("operating_point", {})

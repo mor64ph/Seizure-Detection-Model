@@ -16,9 +16,14 @@ seizure-detection/artifacts/features/
 seizure-detection/artifacts/csv_scaled_features.parquet
 seizure-detection/artifacts/runs/
 
-# 30 MB fitted estimator. One command rebuilds it:
+# The fitted estimator IS committed, as a deliberate exception. At compress=3
+# the forest is 8.5 MB rather than 29.7 MB and loads in half a second, which is
+# small enough that the hosted demo needs no separate model-hosting step and a
+# clone can run the upload tab immediately. Rebuild it with:
 #   seizure fit-final --view aggregated --loso-detail artifacts/rfjoint_base/detail_aggregated.json
+# Any other pickled model stays out.
 *.joblib
+!seizure-detection/artifacts/final_model_aggregated.joblib
 
 # -------------------------------------------------------------------- reports
 # The small result files ARE committed on purpose -- report.md/json, the

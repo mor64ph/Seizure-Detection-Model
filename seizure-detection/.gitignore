@@ -9,6 +9,7 @@ artifacts/*
 !artifacts/*.json
 !artifacts/*.md
 !artifacts/scores_aggregated.parquet
+!artifacts/final_model_aggregated.joblib
 !artifacts/rfjoint_base/
 !artifacts/experiments/
 !artifacts/final_full_baseline/

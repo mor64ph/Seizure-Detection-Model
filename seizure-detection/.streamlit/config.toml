@@ -1,0 +1,13 @@
+[server]
+# A one-hour CHB-MIT record is about 51 MB, so the 200 MB default is already
+# generous. Capping it lower keeps a hosted instance from being used as file
+# storage, and an oversized upload fails fast instead of after a long transfer.
+maxUploadSize = 120
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1565c0"
