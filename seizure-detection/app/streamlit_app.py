@@ -170,6 +170,43 @@ REFUSALS = {
 }
 
 
+def describe_edf(raw: bytes) -> dict | None:
+    """What the file actually contains, for a useful refusal message.
+
+    A rejection listing the 18 canonical channels as "missing" tells the user
+    nothing about their own file. Parsing the header is cheap -- it is the first
+    few hundred KB -- and lets the app say "2 EEG channels at 250 Hz" instead,
+    which is the fact that explains the refusal. Driven by a real upload: a
+    24-hour 2-channel ambulatory wearable recording, where the useful answer is
+    "this is the wrong kind of recording", not a list of names.
+    """
+    try:
+        from seizure.ingest import edf_header as EH
+        hsz = EH.header_size_from_probe(raw[:256])
+        h = EH.parse(raw[:hsz])
+        rates = [n / h.record_duration_sec for n in h.samples_per_record]
+        # Precedence matters: `and` binds tighter than `or`, so the name test
+        # must be parenthesised or a 1 Hz channel called "EEG" counts.
+        eeg = [l for l, r in zip(h.labels, rates)
+               if r >= 100 and ("eeg" in l.lower() or _is_electrodeish(l))]
+        return {
+            "n_signals": h.n_signals,
+            "labels": list(h.labels),
+            "rates": sorted({round(r, 1) for r in rates}),
+            "minutes": h.record_duration_sec * h.n_records / 60.0,
+            "eeg_like": eeg,
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _is_electrodeish(label: str) -> bool:
+    """Does the label look like a 10-20 site or a bipolar pair of them."""
+    from seizure.signal.channels import ELECTRODES, is_scalp_eeg
+    up = label.strip().upper()
+    return is_scalp_eeg(up) or up in ELECTRODES
+
+
 # ----------------------------------------------------------------- resources
 @st.cache_resource
 def load_model():
@@ -243,7 +280,8 @@ def analyse(raw: bytes, filename: str) -> dict:
                 signal = None
 
     if res.skipped_reason:
-        return {"ok": False, "reason": str(res.skipped_reason), "name": filename}
+        return {"ok": False, "reason": str(res.skipped_reason), "name": filename,
+                "describe": describe_edf(raw)}
     agg = res.aggregated
     if agg is None or not len(agg):
         return {"ok": False, "reason": "no_windows", "name": filename}
@@ -387,7 +425,26 @@ def page_analyse() -> None:
             key, "Unsupported recording")
         st.error(f"**{heading}** — "
                  f"{REFUSALS.get(key, 'this file cannot be read.')}")
-        st.caption(f"Pipeline reason: `{a['reason']}`")
+        d = a.get("describe")
+        if d:
+            st.markdown(
+                f"**What this file contains** — {d['n_signals']} signals at "
+                f"{', '.join(f'{r:g} Hz' for r in d['rates'])}, "
+                f"{d['minutes']:.0f} minutes long. "
+                f"{len(d['eeg_like'])} of them look like scalp-EEG channels.")
+            st.markdown("**What the model needs** — 18 bipolar derivations "
+                        "between named 10-20 electrode positions, all at 256 Hz.")
+            st.code(", ".join(d["labels"][:24]), language=None)
+            if len(d["eeg_like"]) < 18:
+                st.caption(
+                    "A bipolar derivation is the difference between two named "
+                    "electrode sites, so it cannot be reconstructed from "
+                    "channels whose positions are unknown. Resampling and "
+                    "padding the missing channels would let the model run and "
+                    "return confident scores it has no basis for, which is "
+                    "why this is refused rather than adapted.")
+        with st.expander("Pipeline detail"):
+            st.code(a["reason"], language=None)
         model_card()
         return
 
