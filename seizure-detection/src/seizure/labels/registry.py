@@ -26,11 +26,20 @@ CASE_TO_SUBJECT["chb21"] = "sub01"  # same human as chb01, 1.5 years later
 RECORD_RE = re.compile(r"^(?P<case>chb\d{2})[a-z]?_(?P<idx>\d+)(?:\+)?$")
 
 
-def case_of_record(record_id: str) -> str:
-    """'chb17a_03' -> 'chb17'. Raises on anything unrecognised (PRD §6.1)."""
+def case_of_record(record_id: str, strict: bool = True) -> str | None:
+    """'chb17a_03' -> 'chb17'. Raises on anything unrecognised (PRD §6.1).
+
+    ``strict=False`` returns None instead, for **inference on a recording that
+    is not part of the study**. It exists only for that: an uploaded file has no
+    case and no subject, and inventing one would be worse than admitting it
+    (R3). Every training and ingest path leaves strict on, so R5's guarantee
+    that each row carries a real subject is untouched.
+    """
     m = RECORD_RE.match(record_id)
     if not m:
-        raise ValueError(f"unrecognised record id: {record_id!r}")
+        if strict:
+            raise ValueError(f"unrecognised record id: {record_id!r}")
+        return None
     return m.group("case")
 
 

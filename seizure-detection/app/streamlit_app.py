@@ -134,6 +134,9 @@ REFUSALS = {
     "unexpected_sample_rate": "The model requires 256 Hz. A different rate shifts "
                               "every spectral feature.",
     "record_shorter_than_window": "The recording is shorter than one 10-second window.",
+    "unreadable": "This file could not be decoded as EDF.",
+    "no_windows": "No analysis windows could be built from this recording.",
+    "schema_mismatch": "This recording produced an unexpected feature set.",
 }
 
 
@@ -177,7 +180,11 @@ def analyse(raw: bytes, filename: str) -> dict:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / filename
         p.write_bytes(raw)
-        res = EX.extract_record(p, [], cfg)
+        try:
+            res = EX.extract_record(p, [], cfg, allow_unknown_record=True)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": f"unreadable:{type(e).__name__}: {e}",
+                    "name": filename}
         signal = None
         if not res.skipped_reason:
             from seizure.signal import io as SIO

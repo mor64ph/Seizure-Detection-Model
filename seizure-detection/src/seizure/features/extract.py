@@ -41,11 +41,12 @@ class ExtractResult:
         return self.skipped_reason is not None
 
 
-def key_columns(record_id: str, rows: list[dict], cfg: Config) -> pd.DataFrame:
-    case = case_of_record(record_id)
+def key_columns(record_id: str, rows: list[dict], cfg: Config,
+                allow_unknown: bool = False) -> pd.DataFrame:
+    case = case_of_record(record_id, strict=not allow_unknown)
     df = pd.DataFrame(rows).drop(columns=["_s0", "_s1"])
-    df.insert(1, "case_id", case)
-    df.insert(2, "subject_id", CASE_TO_SUBJECT[case])
+    df.insert(1, "case_id", case if case else pd.NA)
+    df.insert(2, "subject_id", CASE_TO_SUBJECT.get(case) if case else pd.NA)
     df["config_hash"] = cfg.extraction_hash  # R19
     df["source"] = cfg.data.source  # R1
     return df
@@ -55,8 +56,14 @@ def extract_record(
     path: Path,
     ictal: list[tuple[int, int]],
     cfg: Config,
+    allow_unknown_record: bool = False,
 ) -> ExtractResult:
-    """Extract both feature views for one .edf file."""
+    """Extract both feature views for one .edf file.
+
+    ``allow_unknown_record`` is for scoring a recording from outside the study,
+    where the filename carries no case or subject. Without it the id lookup
+    raises, which made every arbitrary upload fail before reaching the model.
+    """
     record_id = Path(path).stem
     canonical = list(cfg.signal.canonical_channels)
 
@@ -104,7 +111,7 @@ def extract_record(
     )  # (n_windows, n_channels, 14)
 
     feats = core.feature_names(cfg.features.bands)
-    keys = key_columns(record_id, rows, cfg)
+    keys = key_columns(record_id, rows, cfg, allow_unknown_record)
 
     pc = agg = None
     if "per_channel" in cfg.features.views:
