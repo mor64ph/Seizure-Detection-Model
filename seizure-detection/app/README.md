@@ -1,69 +1,63 @@
 # Seizure Detector Report Card
 
-*Does it work on a patient it has never seen?*
-
 ```bash
 cd seizure-detection
 pip install -r ../requirements.txt
 streamlit run app/streamlit_app.py --server.address 127.0.0.1
 ```
 
-Five sections, sidebar-navigated. Tabs 1–4 need no raw data; the small result files they
-read are committed.
+An upload-driven analysis tool. **Every figure on every page is computed from the recording
+the user supplies** — nothing is precomputed from the study. One analysis is held in
+`st.session_state["analysis"]` and shared by all three pages.
 
-| Section | What it shows |
+| Page | Content |
 |---|---|
-| Overview | KPI strip, four findings, and the full **model card** |
-| Per-patient outcomes | 23 patients graded Reliable / Partial / Over-alarming / No detections |
-| Record explorer | threshold and run-length sliders redrawing alarms live |
-| Validation protocol | grouped-by-patient against shuffled-windows, same model |
-| Analyse a recording | upload an EDF and run the real pipeline over it |
+| Analyse | upload, headline figures for that file, model card |
+| Signal and detections | score trace, flagged segments, band powers over time, raw montage |
+| Operating point | threshold/k simulation plus sweep curves for that file |
 
-## Design rules
+## Accuracy needs labels
 
-**The evaluation is the product.** Limitations are presented as model documentation, not as
-warning boxes. A model card reads as engineering maturity; a wall of red alerts reads as
-hedging. Same information, different register.
+An arbitrary EDF has no annotation, so sensitivity, false alarms and latency are *not
+computable* for it. Rather than invent them, the app resolves three states from the filename
+against `artifacts/seizure_intervals.json` (committed) and the CHB-MIT record-id pattern:
 
-**Two things are functional, not cosmetic, and must survive any redesign:**
+| `kind` | Meaning | What is shown |
+|---|---|---|
+| `annotated` | matches a record with annotated seizures | full accuracy against ground truth |
+| `annotated_seizure_free` | matches a CHB-MIT record with no seizures | every flagged segment is a false alarm; flagging none is the correct result |
+| `unverifiable` | no pattern match | detection output only, labelled unverifiable |
 
-1. **The refusal gate** in `page_analyse`. Uploaded files pass through
-   `features/extract.py`, so a recording lacking the 18 canonical channels, or not at 256 Hz,
-   or shorter than one window, is rejected with the pipeline's own reason. Without it the
-   model silently scores out-of-distribution input and returns confident nonsense — which is
-   both unsafe and a worse product than one that says "unsupported format". Read
-   `res.skipped_reason` **directly**; a `getattr(res, ..., None)` with a default silently
-   disabled the whole gate once already.
-2. **The one-line research-use footer.** Minimum for software that ingests EEG and talks
-   about seizures. It is small print, not a banner, and that is the right size for it.
+The middle state matters: a seizure-free record is *absent* from the intervals file, so
+membership alone cannot tell "no annotation" from "annotated as having no seizure". Gate
+annotation-dependent output on `a["recognised"]`, never on a non-empty `truth` list —
+`truth == []` is falsy but meaningful.
 
-## Implementation notes
+## Non-negotiable
 
-- Reads the frozen snapshot in `artifacts/rfjoint_base/`, **not** live `artifacts/`. Training
-  runs rewrite `detail_*.json` in place and a reader should not have numbers move mid-session.
-  Re-point `SNAP` when promoting a new run.
-- KPI cards are hand-rolled HTML rather than `st.metric`, for control over typography and
-  density. Consequence: `AppTest` reports `metric=0` — assert against `at.markdown` instead.
-- The Record explorer needs `artifacts/scores_aggregated.parquet` from
-  `seizure export-scores`. Each patient is scored by the model fitted on **its own LOSO
-  fold**, so those are held-out predictions and the slider's default is the operating point
-  the pipeline actually chose.
-- Raw EEG traces exist only for `chb01`, `chb12` and `chb17`. Everywhere else the view
-  explains that recordings are streamed and deleted after feature extraction.
-- The Overview headline model follows `report.json`'s `selected_model`, which honours
-  `training.headline_model` (R44).
+- **The refusal gate.** Uploads pass through `features/extract.py`, so a wrong montage,
+  wrong sample rate or too-short recording is rejected with the pipeline's own reason.
+  Without it the model scores out-of-distribution input and returns confident nonsense.
+  Read `res.skipped_reason` **directly**; a defaulted `getattr` silently disabled it once.
+- **The one-line research-use footer.**
 
-## Testing
+## Traps that cost real debugging
 
-`AppTest` drives every section. Identify widgets **by label**, not index — the main-content
-radio precedes the sidebar radio in the element tree, so positional access silently grabs the
-wrong widget:
+- **`icon=` must be a single emoji or `":material/name:"`.** `icon="✓"` and `icon="!"` both
+  raise `StreamlitAPIException` — and only on the success path, so the app looked fine until
+  a recording was actually loaded.
+- **Never put two `st.*` calls in a multi-line ternary.** Streamlit introspects the caller's
+  source line to name the element and the parse fails with a `SyntaxError` thrown from
+  inside Streamlit.
+- **`AppTest` cannot drive `file_uploader`.** Inject `at.session_state["analysis"]` with a
+  real analysis dict instead; testing only the empty state misses every populated-path bug.
+- KPI cards are hand-rolled HTML, so `AppTest` reports `metric=0`. Assert on `at.markdown`.
+- `.streamlit/config.toml` and `requirements.txt` must both live at the **repo root** —
+  Streamlit reads `$CWD/.streamlit/config.toml` and Cloud runs from the root regardless of
+  where the entrypoint sits. Misplaced, they are ignored silently.
 
-```python
-radio = next(r for r in at.radio if "consecutive" in r.label.lower())
-```
+## Performance
 
-Interaction behaviour worth preserving, measured on `chb01_03`: at the tuned operating point
-(threshold 0.125, k=3) the record shows 3 false alarms and 4.2% time in alarm; dropping k to 1
-gives 22 and 11.7%; at threshold 0.02 it is 62 and 70.6%. Detection stays at 1 throughout.
-That progression is the whole point of the section.
+`analyse()` is cached on the file bytes, so re-selecting a file is free and the result
+survives navigation. The decoded montage is stored at 64 Hz — a sixteenth of the memory of
+the 256 Hz original, still ample for drawing traces. The model scores the full-rate signal.
