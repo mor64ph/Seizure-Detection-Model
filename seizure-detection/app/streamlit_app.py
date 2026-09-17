@@ -51,13 +51,24 @@ CAT_LABEL = {
 }
 SATURATION_PRECISION = 0.01
 
+# "auto", never "expanded". Measured on a 390px viewport via CDP device
+# emulation: an expanded sidebar renders 300px wide regardless of screen size,
+# leaving an 80px sliver of content and clipping the title mid-word. "auto"
+# collapses it behind the hamburger below Streamlit's mobile breakpoint while
+# still opening it on desktop.
 st.set_page_config(page_title="Seizure Detector Report Card",
                    page_icon="◫", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="auto")
 
 CSS = f"""
 <style>
 #MainMenu, footer, header {{visibility: hidden;}}
+/* `header {{visibility:hidden}}` leaves the toolbar's own children visible, so
+   the owner-only "Deploy" button still renders over the page on a hosted app.
+   Measured at 60x28px in the top-right on every route. */
+div[data-testid="stToolbar"], div[data-testid="stDecoration"],
+div[data-testid="stStatusWidget"], .stAppDeployButton,
+button[kind="header"] {{display: none !important;}}
 .block-container {{padding-top: 2.1rem; padding-bottom: 3rem; max-width: 1180px;}}
 html, body, [class*="css"] {{
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
@@ -93,6 +104,42 @@ section[data-testid="stSidebar"] {{border-right: 1px solid {LINE};}}
 .sb-brand {{font-weight: 680; font-size: 1.02rem; margin-bottom: .1rem;}}
 .sb-sub {{color: {MUTED}; font-size: .78rem; margin-bottom: 1rem;}}
 .stPlotlyChart {{border: 1px solid {LINE}; border-radius: 10px; padding: .35rem;}}
+
+/* Markdown tables (the model card) scroll rather than widen the document.
+   Without this a 6-column table sets the page's scrollWidth on a phone. */
+div[data-testid="stMarkdownContainer"] table {{display: block; overflow-x: auto;
+  max-width: 100%;}}
+
+@media (max-width: 640px) {{
+  .block-container {{padding-top: 1.1rem; padding-left: .85rem;
+    padding-right: .85rem; padding-bottom: 1.6rem;}}
+  .hero {{padding-bottom: .8rem; margin-bottom: 1.1rem;}}
+  .hero-title {{font-size: 1.32rem;}}
+  .hero-sub {{font-size: .9rem;}}
+  /* Two per row at 50% rather than the 150px basis, which left an orphan
+     card on a third line at 375px. */
+  .kpi {{flex: 1 1 calc(50% - .4rem); min-width: 0; padding: .65rem .75rem;}}
+  .kpi-value {{font-size: 1.24rem;}}
+  .kpi-label {{font-size: .66rem;}}
+  .kpi-note {{font-size: .72rem;}}
+  .kpi-grid {{gap: .5rem; margin-bottom: 1.1rem;}}
+  .card {{padding: .8rem .9rem; margin-bottom: .6rem;}}
+  .card h4 {{font-size: .91rem;}}
+  .card p {{font-size: .85rem; line-height: 1.45;}}
+  .section {{margin: 1.2rem 0 .45rem;}}
+  .foot {{margin-top: 1.8rem; font-size: .73rem;}}
+  /* Radio rows measured 33x22px, well under the ~44px touch guidance. The hit
+     area is the label, so pad that rather than the 13px input inside it. */
+  div[role="radiogroup"] label, section[data-testid="stSidebar"] label,
+  div[data-testid="stCheckbox"] label {{
+    min-height: 40px; display: flex; align-items: center;}}
+  div[role="radiogroup"] {{gap: .1rem;}}
+  /* Streamlit's own icon buttons (drawer chevron, dataframe toolbar) ship at
+     22-28px. Nudged up rather than restyled, to avoid fighting its internals. */
+  section[data-testid="stSidebar"] button[kind="headerNoPadding"],
+  div[data-testid="stElementToolbarButton"] button {{min-width: 34px;
+    min-height: 34px;}}
+}}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
@@ -175,9 +222,9 @@ def section(label: str) -> None:
     st.markdown(f'<div class="section">{label}</div>', unsafe_allow_html=True)
 
 
-def plot(fig, height: int = 380) -> None:
+def plot(fig, height: int = 380, top: int = 18) -> None:
     fig.update_layout(
-        height=height, margin=dict(l=8, r=8, t=18, b=8),
+        height=height, margin=dict(l=8, r=8, t=top, b=8),
         paper_bgcolor="#fff", plot_bgcolor="#fff",
         font=dict(family="-apple-system, Segoe UI, Inter, sans-serif",
                   size=12, color=INK),
@@ -300,8 +347,9 @@ def page_patients(loso: pd.DataFrame, model: str) -> None:
     fig.update_layout(barmode="stack", xaxis_range=[0, 1.02],
                       xaxis_tickformat=".0%",
                       xaxis_title="share of that patient's seizures detected",
-                      legend=dict(orientation="h", y=1.06, x=0))
-    plot(fig, 560)
+                      xaxis_tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+                      legend=dict(orientation="h", y=1.10, x=0))
+    plot(fig, 560, top=58)
 
     card("Why four categories and not a single average",
          f"Sensitivity alone cannot separate a working detector from a saturated one. "
@@ -462,8 +510,8 @@ def page_validation(loso: pd.DataFrame, rand: pd.DataFrame) -> None:
                 textposition="outside")
     fig.update_layout(barmode="group", yaxis_title="PR-AUC",
                       yaxis_range=[0, max(t.shuffled.max(), t.grouped.max()) * 1.22],
-                      legend=dict(orientation="h", y=1.08, x=0))
-    plot(fig, 400)
+                      legend=dict(orientation="h", y=1.10, x=0))
+    plot(fig, 400, top=52)
 
     st.dataframe(
         t.rename(columns={"grouped": "grouped by patient", "shuffled": "windows shuffled"}),
