@@ -7,6 +7,16 @@ cross-validation, with an honest report of what it can and cannot do.
 limits. Every number below was produced by `seizure report` from run artifacts — none was
 typed by hand (R27).
 
+> ### Not a medical device
+>
+> This is research code built on a public research dataset. It is **not** a diagnostic tool, has
+> no regulatory clearance, and must not inform any decision about any person's care. It cannot
+> be used on consumer EEG hardware, and it produces no finding about an individual.
+>
+> Its measured performance is the reason this warning is not boilerplate: on patients it had
+> never seen, it detected **71 of 185 seizures**, and for **7 of 23 patients it detected nothing
+> at all**. Seizure precautions and seizure action plans come from a treating neurologist.
+
 ---
 
 ## What this is, in one table
