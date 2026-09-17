@@ -33,3 +33,10 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Keep pytest's scratch inside the project rather than under the system temp
+# directory. On one machine %TEMP%\pytest-of-<user> ended up with an ACL that
+# denied even its owner -- Get-Acl and Remove-Item both failed -- and 15 tests
+# that use tmp_path errored at setup with WinError 5. A project-local basetemp
+# sidesteps any such host-level permission damage. pytest clears this directory
+# on every run, which is what it is for.
+addopts = "--basetemp=.pytest-tmp"

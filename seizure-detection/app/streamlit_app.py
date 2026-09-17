@@ -126,6 +126,21 @@ st.markdown(CSS, unsafe_allow_html=True)
 # annotated seizure-free, no pattern match = genuinely unverifiable.
 RECORD_RE = re.compile(r"^chb\d{2}[a-z]?_\d+\+?$", re.I)
 
+# Bundled demo recordings. A visitor has no EDF of their own, and a full
+# CHB-MIT record is ~51 MB, so a short real excerpt ships with the repo.
+# Its clock restarts at zero, so the annotated span is shifted by the cut
+# offset and cannot be recovered from the filename -- hence this table.
+# Regenerate with scripts/make_sample_excerpt.py; renaming the file without
+# updating the key silently loses the ground truth.
+SAMPLES_DIR = ROOT / "samples"
+BUNDLED_SAMPLES = {
+    "sample_chb01_03_2880-3180s.edf": {
+        "label": "chb01_03 — 5 min around an annotated seizure",
+        "truth": [(116, 156)],
+        "note": "CHB-MIT chb01_03, seconds 2880-3180 of the full record.",
+    },
+}
+
 REFUSALS = {
     "missing_channels": "This recording does not contain the 18 canonical bipolar "
                         "channels the model requires.",
@@ -209,7 +224,9 @@ def analyse(raw: bytes, filename: str) -> dict:
     scores = bundle["model"].predict_proba(agg[cols].to_numpy(dtype=np.float32))[:, 1]
     stem = Path(filename).stem
     all_truth = load_truth()
-    if stem in all_truth:
+    if filename in BUNDLED_SAMPLES:
+        truth, kind = BUNDLED_SAMPLES[filename]["truth"], "annotated"
+    elif stem in all_truth:
         truth, kind = all_truth[stem], "annotated"
     elif RECORD_RE.match(stem):
         truth, kind = [], "annotated_seizure_free"
@@ -295,6 +312,21 @@ def page_analyse() -> None:
     st.caption("Requires 18 canonical bipolar channels at 256 Hz (CHB-MIT format). "
                "Files are processed in memory and discarded when the request ends. "
                "Use public research recordings — do not upload identifiable patient data.")
+    available = [(n, m) for n, m in BUNDLED_SAMPLES.items()
+                 if (SAMPLES_DIR / n).exists()]
+    if available:
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            if st.button("Load sample recording", type="primary",
+                         width="stretch"):
+                name, meta = available[0]
+                with st.spinner("Loading bundled sample…"):
+                    st.session_state["analysis"] = analyse(
+                        (SAMPLES_DIR / name).read_bytes(), name)
+        with c2:
+            st.caption(f"{available[0][1]['label']} · "
+                       f"{available[0][1]['note']}")
+
     up = st.file_uploader("EDF recording", type=["edf"], label_visibility="collapsed")
 
     if up is not None:

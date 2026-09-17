@@ -11,6 +11,11 @@ truth by matching the filename against known record ids, so calling this
 accuracy that means nothing. Under a neutral name it lands in the
 `unverifiable` branch, which is the honest one for synthetic input.
 
+MEASURED: the model does NOT detect the injected event -- mean score 0.151
+inside it against 0.259 on background, i.e. below background. Not tuned
+further on purpose; see samples/README.md. For a demo that shows detection
+actually working, use the real excerpt from make_sample_excerpt.py.
+
 No EDF writer is installed (no pyedflib, no edfio, and mne's EDF export needs
 edfio), so the 256-byte general header plus 256 bytes per signal are written
 directly. Verified by reading the result back through the project's own header
