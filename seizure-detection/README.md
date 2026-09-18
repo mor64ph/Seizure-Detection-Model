@@ -1,291 +1,185 @@
-# Cross-patient seizure detection on CHB-MIT
+# Cross-Patient Seizure Detection on CHB-MIT
 
-A window-level seizure detector on scalp EEG, evaluated under leave-one-subject-out
-cross-validation, with an honest report of what it can and cannot do.
+Window-level seizure detection on scalp EEG, evaluated under leave-one-subject-out
+cross-validation. Built to measure honestly what a classical ML pipeline can and cannot do on
+patients it has never seen.
 
-**The deliverable is not the model.** It is the pipeline plus an evaluation that states its own
-limits. Every number below was produced by `seizure report` from run artifacts — none was
-typed by hand (R27).
+**[Live demo →](https://eeg-seizure-detection-model.streamlit.app)** · [Full evaluation report](artifacts/report.md) · [Project rules](../RULES.md)
 
-**Live demo:** [eeg-seizure-detection-model.streamlit.app](https://eeg-seizure-detection-model.streamlit.app)
-— upload a recording, or click *Load sample recording* for a bundled five-minute excerpt of
-`chb01_03` around an annotated seizure. Source in [`app/`](app/), full evaluation in
-[`artifacts/report.md`](artifacts/report.md).
-
-> ### Not a medical device
->
-> This is research code built on a public research dataset. It is **not** a diagnostic tool, has
-> no regulatory clearance, and must not inform any decision about any person's care. It cannot
-> be used on consumer EEG hardware, and it produces no finding about an individual.
->
-> Its measured performance is the reason this warning is not boilerplate: on patients it had
-> never seen, it detected **71 of 185 seizures**, and for **7 of 23 patients it detected nothing
-> at all**. Seizure precautions and seizure action plans come from a treating neurologist.
+> **Not a medical device.** Research code on a public research dataset. No regulatory clearance;
+> not for use in patient care. On held-out patients it detected 71 of 185 seizures and found
+> nothing at all for 7 of 23 patients.
 
 ---
 
-## What this is, in one table
+## Results
 
-| | |
-|---|---|
-| Data | CHB-MIT Scalp EEG Database v1.0.0, PhysioNet — 24 case directories, **23 subjects**, 686 `.edf` files, 198 annotated seizures, 981.94 hours, 256 Hz |
-| Unit of prediction | one 10 s non-overlapping window of 18 canonical bipolar channels |
-| Features | 14 per channel per window → 252 per-channel, or 56 aggregated across channels |
-| Models | `DummyClassifier`, logistic regression, random forest, histogram gradient boosting |
-| Primary protocol | leave-one-subject-out, 23 folds, grouped on `subject_id` |
-| Contrast protocol | random 70/10/20 window split, subject ignored — exists to be wrong |
-| Lead metric | PR-AUC, plus event sensitivity, detection latency and false alarms per hour |
+Leave-one-subject-out, 23 folds, 979.9 hours, 352,742 windows at a 0.32% seizure rate.
 
-Read [`../RULES.md`](../RULES.md) before changing anything. It is binding, it supersedes the
-PRD where they conflict, and its 44 numbered rules each exist because something went wrong.
-Read [`docs/data-notes.md`](docs/data-notes.md) for every discrepancy found in the wild.
+| Model | PR-AUC | ROC-AUC | Precision (pooled) | Seizures | FA/h | Time in alarm |
+|---|---|---|---|---|---|---|
+| `dummy` | 0.004 | 0.500 | 0.0032 | 185 / 185 | 0.89 | **1.000** |
+| `logreg` | 0.164 | 0.798 | 0.0043 | 55 / 185 | 4.08 | 0.243 |
+| `rf` | 0.178 | 0.833 | 0.0047 | **71 / 185** | 4.36 | 0.261 |
+| `hgb` | **0.205** | 0.843 | 0.0044 | 59 / 185 | **3.52** | 0.256 |
 
----
+`rf` is the designated configuration, chosen on event-level results. Validation-only selection
+would have picked `hgb`, so the `rf` figures are an optimistically biased estimate (see R44).
 
-## Which stages ran where
+**Read the `dummy` row.** It predicts "no seizure" for every window, yet reports 185 of 185
+seizures at a better false-alarm rate than any real model — because false alarms are counted
+per *run*, and a detector that never stops alarming logs one long alarm. Its 100% time in alarm
+is what exposes it. This is why a deliberately useless baseline is mandatory, and why FA/h is
+never reported without time in alarm beside it.
 
-Stated plainly, because it would be easy to imply otherwise.
+Per-patient results are bimodal: reliable for 4 of 23 patients, no detections for 7, and 3 more
+reach full sensitivity only by alarming almost continuously. Pooled percentages hide that — see
+[`artifacts/report.md`](artifacts/report.md) for the per-patient table.
 
-| Stage | Where it ran |
-|---|---|
-| Header pre-pass over all 686 files (R30) | **locally**, ~4.2 MB of HTTP range requests |
-| Non-`.edf` payload sync (R13) | **locally**, 2.19 MB |
-| Label parse + cross-validation (R29) | **locally** |
-| Streaming ingest, extraction (R11/R14) | **locally** |
-| LOSO training, evaluation, report | **locally** |
-| Spark fan-out over files | **not used.** 686 files is a fan-out over paths, not a big-data workload, and at this scale a thread pool is the honest tool. The portability grep test (R20) still passes, so the feature path would run unchanged on Spark Connect. |
-| Databricks serverless | **not used, and `notebooks/00_verify_portability.py` has never been executed.** It is written against the serverless constraints and calls the same scanner the test suite uses, but no workspace was available, so its committed output does not exist. **Descoped by the project owner on 2026-09-17** — it is no longer an acceptance criterion, which does not make it done. The code path remains untested against a live cluster, and any future claim that it runs on Databricks needs an actual run behind it. |
-| MLflow tracking | **not used.** `tracking/sink.py` writes the local JSON run log that every number here comes from, and mirrors to MLflow only when an experiment is configured; it currently reports `skipped: no experiment configured`. **Descoped by the project owner on 2026-09-17.** The mirror code has never run against a tracking server. |
+**Measured data leakage.** Same model and features, only the split protocol differs:
 
-**No stage ran in the cloud.** The full run is local.
-
----
-
-## The honest result
-
-Full numbers in [`artifacts/report.md`](artifacts/report.md), regenerated by `make report`.
-This run is the **complete database**: **23 subjects, 683 of 686 records, 352,742 windows**
-(1,133 ictal, 350,324 interictal, 1,285 guard), positive rate **0.32%**, **979.9 hours**,
-**0 checksum failures**.
-
-### Leave-one-subject-out, aggregated view
-
-| model | PR-AUC | ROC-AUC | prec (mean) | prec (pooled) | accuracy | events | event sens | FA/h | time in alarm |
-|---|---|---|---|---|---|---|---|---|---|
-| dummy | 0.004 | 0.500 | 0.000 | 0.000 | **0.996** | 0 of 185 | 0.000 | 0.00 | 0.000 |
-| hgb | 0.205 | 0.843 | 0.231 | **0.004** | 0.885 | 56 of 185 | 0.303 | 2.61 | 0.207 |
-| rf | 0.178 | 0.833 | 0.172 | **0.004** | 0.872 | 62 of 185 | 0.335 | 6.74 | 0.222 |
-| logreg | 0.164 | 0.798 | 0.182 | **0.003** | 0.925 | 44 of 185 | 0.238 | 3.98 | 0.191 |
-
-**Accuracy is meaningless here.** `DummyClassifier(strategy="most_frequent")` scores **99.6%**
-by predicting that no window is ever a seizure. It detects zero. Note also how flattering
-ROC-AUC is: 0.843 against a PR-AUC of 0.205 on the same predictions — exactly the gap PRD §11.1
-warns about at low prevalence.
-
-**Precision is printed twice because the two answers differ by 62x.** The fold mean (0.231)
-averages per-subject ratios, which weights a subject contributing a handful of high-precision
-windows the same as one emitting tens of thousands of false positives. Pooled from the summed
-confusion matrix it is **0.0037** — 279 true positives against 74,678 false ones, so roughly
-**1 flagged window in 270 is real**. Quote the pooled figure (R40).
-
-**`time in alarm` exists because FA/h alone is gameable.** False alarms are counted per *run*,
-so a detector that never stops alarming logs one long false alarm and an excellent FA/h — the
-dummy classifier demonstrated exactly that under an earlier operating-point search, reporting
-185 of 185 seizures at 0.89 FA/h while alarming continuously (R41). Read the two together:
-`hgb`'s 2.61 FA/h sounds tolerable, but it holds an alarm for **20.7% of the recording** —
-**201.9 of 976.4 evaluated hours**, of which **201.2 hours are false alarm**. Fewer than 45
-minutes of that alarm time overlaps an actual seizure. That is what a technologist's shift
-would actually look like, and no count-based metric shows it.
-
-The event denominator is 185, not 198, and the arithmetic is printed: **198 annotated seizures
-− 13 lying in the three skipped `chb12` records = 185 reachable, and 185 evaluated.** Nothing
-unaccounted.
-
-### The same model, two protocols — and it depends on the model
-
-| model | LOSO PR-AUC | random-split PR-AUC | Δ |
+| Model | Grouped by patient | Windows shuffled | Inflation |
 |---|---|---|---|
-| hgb | 0.205 | 0.388 | **+0.182** |
-| rf | 0.178 | 0.339 | **+0.161** |
-| logreg | 0.164 | 0.068 | −0.096 |
+| `hgb` | 0.205 | 0.388 | **+0.182** |
+| `rf` | 0.178 | 0.339 | +0.161 |
+| `logreg` | 0.164 | 0.068 | −0.096 |
 
-The non-linear models gain enormously from ignoring subject identity. **Logistic regression
-gains nothing** — it does worse under the random split. A single global hyperplane over 56
-channel-agnostic features has no way to carve out per-subject regions, so seeing a subject in
-both train and test buys it nothing; boosting and forests can, and do.
-
-So "how much does a bad split inflate your numbers" has no single answer — it depends on
-whether the model is *able* to memorise the patient. The contrast run is deliberately wrong in
-**exactly one** way (R37): it ignores subject identity, but still picks its threshold on a
-validation slice, so the delta is attributable to the protocol and not to a second leak.
-
-### The feature-view result contradicts the PRD
-
-PRD §8.3 predicted the aggregated view would beat per-channel under LOSO while losing under a
-random split. **An earlier partial run appeared to falsify it. On the complete database it is
-confirmed — but only if you judge on event metrics.**
-
-| `hgb` | aggregated (56 cols) | per-channel (252 cols) |
-|---|---|---|
-| window PR-AUC (LOSO) | 0.205 | **0.308** |
-| random-split PR-AUC | 0.388 | 0.712 |
-| **leak gap** | **+0.182** | **+0.404** |
-| seizures detected | **56 of 185** | 45 of 185 |
-| FA/h | **2.61** | 5.86 |
-
-Per-channel scores 50% higher on window PR-AUC and yet detects **11 fewer seizures at more than
-double the false-alarm rate**, with a leak gap 2.2x larger. `rf` repeats it: window PR-AUC
-0.178 → 0.301, FA/h 6.74 → **10.86**. The extra 196 columns buy window-level score that does
-not convert into clinical detection, which is the outcome `features/views.py` predicted in
-writing before the data existed: the capacity is spent on **subject identity**, not seizure
-morphology.
-
-**The lesson about method is stronger than the lesson about features.** The reversed conclusion
-came from a 138-record subset at 1.71% prevalence — 5x the real positive rate. Every figure in
-RULES Appendix C is now labelled `[partial]` or `[full]`, and `[partial]` figures may not be
-quoted. Judge a feature view on event metrics, never on window PR-AUC alone.
-
-The leak is also not purely a property of model capacity: the gap differs by *feature view* for
-the same estimator, so no single "random-split inflation" number describes a dataset — it is a
-property of the view and the model class together.
-
-### Per-subject results are bimodal
-
-The pooled 30.3% event sensitivity is not "detects 30% of seizures in any patient." Per subject,
-`hgb` + aggregated across the 23 held-out patients:
-
-- **10 of 23 detect zero seizures** — `sub06`, `sub07`, `sub12`, `sub13`, `sub14`, `sub15`,
-  `sub18`, `sub20`, `sub22`, `sub23`. On these the detector does not work at all.
-- **7 of 23 detect every seizure** — but only **three** genuinely: `sub08` (precision 0.947),
-  `sub19` (0.846), `sub05` (0.640). The other four reach sensitivity 1.000 by alarming almost
-  continuously: `sub04` (precision 0.001), `sub09` (0.005), `sub10` (0.009), `sub16` (0.002).
-- **6 of 23 partial**, between 12% and 73%.
-
-**So the honest headline is "it works on 3 of 23 patients", not "30% sensitivity."** Averaging
-turns a bimodal failure into a respectable-looking number, which is why PRD §11.1 demands the
-per-subject table and why sensitivity must always be read beside precision. The biological
-reasons — individual anatomy, electrode placement, age-dependent background across a
-1.5-to-22-year cohort, and differing seizure onset zones — are the subject of the companion
-primer.
-
-**The selected threshold varied from 0.000 to 0.994 across folds**, and the tuned `k` split
-12/8/3 across {2, 1, 3} — so `k` is not a configured constant and must not be quoted as one.
-PRD §10.3 calls that variance a finding in its own right, and it is: a detector needing a
-different operating point for every patient is not ready for a patient it has not met.
-
-**Threshold and `k` are not separable, and choosing them sequentially can detect nothing.**
-`sub07` drew threshold 0.9927 with `k=3`: six correct windows, **zero** false positives, and
-**0 of 3** seizures detected, because no three flagged windows were ever consecutive. Raising a
-threshold shortens every run. A joint search over (threshold, `k`) on validation data
-(`training.joint_threshold_k`) recovers `sub23` (0 of 7 → 3 of 7) and makes `rf` + aggregated
-better on both axes at once — **62 → 71 of 185 seizures with FA/h 6.74 → 4.36** — by choosing
-`k=3` in 17 of 23 folds while lowering the median threshold 0.480 → 0.268. It does **not** rescue
-`sub07`: operating points are tuned on validation subjects, and no search fixes a held-out
-patient whose score distribution differs. That residue is an irreducible property of LOSO, not
-a tuning bug.
-
-### Precision is the problem, not recall
-
-The pooled confusion matrix for the headline model shows **74,678 false-positive windows against
-279 true positives**, with 854 ictal windows missed — a pooled precision of **0.0037**. The F2
-threshold deliberately weights recall over precision, which is the intended trade, but the scale
-of it is only visible pooled.
-
-FA/h of 2.61 is far better than the 9–13 measured on the earlier seizure-enriched subset, and
-the improvement is real rather than cosmetic: the full database adds hundreds of hours of quiet
-interictal recording, and the detector stays silent through most of it. **But it holds an alarm
-for 20.7% of the recording**, essentially all of it false. Count-based FA/h and duration-based
-time-in-alarm disagree about how usable this is, and the honest reading is the pessimistic one.
-
-### What a false negative costs, versus a false positive
-
-These recordings come from children admitted for presurgical evaluation of drug-resistant
-epilepsy, often with medication deliberately reduced to provoke seizures. A **missed seizure**
-is an unrecorded event in a time-limited admission, which can mean weaker localisation for a
-decision about brain surgery, or a longer stay. A **false alarm** costs technologist and nurse
-review time, and accumulates into alarm fatigue that degrades response to true alarms.
-
-The operating point is therefore chosen by maximising **F2**, not F1 — recall weighted above
-precision — on the validation subjects of each fold, and frozen before test scoring (R10). The
-threshold varies across folds, and that variance is itself reported: a detector that needs a
-different threshold for every patient is not ready for a patient it has not met.
+A random split inflates PR-AUC by up to 0.18 because adjacent windows from one patient are
+near-duplicates. Logistic regression gains nothing, so inflation is a property of model
+capacity, not of the dataset alone.
 
 ---
 
-## Reproducing it
+## Quick start
 
 ```bash
-make metadata      # 2.19 MB: summaries, .seizures annotations, checksums (R13)
-make manifest      # ~4.2 MB: header-only pre-pass over 686 files, freezes channels (R30)
-make labels        # parse both label sources, cross-validate, assert 198 (R29)
-make ingest        # stream: download -> verify -> extract -> delete raw (R11/R14)
-make train         # LOSO + the random-split contrast
-make report        # artifacts/report.md and report.json
-make test          # 138 tests
+git clone https://github.com/mor64ph/Seizure-Detection-Model.git
+cd Seizure-Detection-Model
+pip install -r requirements.txt
 ```
 
-`make ingest ARGS="--seizures-only"` restricts to the 141 seizure-containing records — 9.05 GB
-instead of 45.76 GB, still covering all 24 cases and therefore all 23 subjects. **This biases
-the positive rate upward and makes false-alarms-per-hour optimistic**, because the interictal
-retained is peri-ictal rather than a fair sample of monitoring time. If the report was generated
-from a `--seizures-only` run it says so, and the bias is labelled at the point of reporting
-(R26). The full run needs no flag.
+Run the demo app — no dataset required, results and model ship with the repo:
 
-`configs/fast.yaml` is 5 cases, aggregated features, LR only — use it for every iteration.
-`configs/base.yaml` is the real run.
+```bash
+cd seizure-detection
+streamlit run app/streamlit_app.py
+```
 
-### One named fold, spelled out
+Reproduce the evaluation from the committed artifacts:
 
-Fold 0 at seed 42, so the split is reproducible:
+```bash
+make report        # regenerates artifacts/report.md from run artifacts
+make test          # 142 tests
+```
 
-- **test** (3,695 windows): `sub01`
-- **validation** (9,433 windows): `sub03`, `sub11`, `sub15`, `sub17`
-- **train** (7,843 windows after negative downsampling): `sub02`, `sub04`, `sub05`, `sub06`,
-  `sub07`, `sub08`, `sub09`, `sub10`, `sub12`, `sub13`, `sub14`, `sub16`, `sub18`, `sub19`,
-  `sub20`, `sub22`, `sub23`, `sub24`
+Rebuild from raw data (downloads 45.76 GB from PhysioNet, streamed and deleted per file):
 
-`sub01` covers both `chb01` and `chb21` — one person, two case directories — so they can never
-land in different roles (R5). That is the whole point of grouping on subject.
-
-### Disk
-
-26 GB free against a 45.76 GB dataset, so ingest streams at **file** granularity (R14): the
-largest single `.edf` is 0.18 GB against a largest case of 6.86 GB. Peak transient disk stays
-near 0.2 GB. `chb01`, `chb12` and `chb17` are kept permanently (R13) because they exercise the
-montage and naming landmines, so signal code can be iterated offline.
-
-Raw bytes are deleted only through `stream.delete_raw`, which takes the ledger row and refuses
-unless all seven capture-before-delete fields are populated (R11). There is no bare `unlink` of
-a raw file anywhere in the codebase.
+```bash
+make metadata      # 2.19 MB of summaries, annotations and checksums
+make manifest      # header-only pre-pass over 686 files (~4.2 MB)
+make labels        # parse both label sources, cross-validate to 198 seizures
+make ingest        # download -> verify SHA-256 -> featurise -> delete raw
+make train         # LOSO plus the random-split contrast
+make report
+```
 
 ---
 
-## What this does not prove
+## Usage
 
-- **It is paediatric, drug-resistant and surgical.** 23 children evaluated for epilepsy surgery
-  at one hospital with one equipment set. Nothing here transfers to adults, to a different
-  montage, or to ambulatory recording without new evidence.
-- **Scalp EEG cannot see deep sources.** Mesial and sulcal onsets can be electrically silent
-  until they spread, so some false negatives are structural rather than a modelling failure.
-- **The negative class is diseased brain.** Interictal CHB-MIT contains frequent interictal
-  epileptiform discharges — pathological, locally seizure-like, and labelled 0. That caps
-  achievable precision independently of the model.
-- **The annotation is one human's second.** Onsets are marked to the nearest second while the
-  physiological transition is gradual, which is why windows within 30 s of a boundary are
-  labelled `-1` and excluded (PRD §6.2). A deployed detector gets no such exemption.
-- **One label conflict is unresolved.** For `chb24_21` the two label sources disagree by 400 s
-  and there is no third source; the disputed span is forced to guard so it trains and scores
-  nothing either way (see `docs/data-notes.md` §10).
-- **There is no pre-ictal claim.** This is detection, not prediction.
+```bash
+python -m seizure.cli --config configs/base.yaml <command>
+```
+
+| Command | Purpose |
+|---|---|
+| `ingest` | streaming download, verify, featurise, delete raw |
+| `train --view {aggregated,per_channel} [--contrast]` | LOSO evaluation |
+| `report` | regenerate `artifacts/report.md` and `report.json` |
+| `sensitivity` | ictal-threshold sweep (PRD §6.2) |
+| `csv-study` | four-protocol leakage study on the companion CSV |
+| `export-scores --subjects sub01,sub12` | per-window held-out scores |
+| `fit-final --view aggregated` | fit on all subjects and persist for inference |
+
+Configs in [`configs/`](configs/): `base.yaml` is the real run, `fast.yaml` is 5 cases for
+iteration, and the `amplitude_*`/`joint_k`/`search_on`/`select_event` variants reproduce
+specific experiments.
+
+---
+
+## How it works
+
+| Stage | Detail |
+|---|---|
+| Data | CHB-MIT Scalp EEG v1.0.0 (PhysioNet) — 23 subjects, 24 cases, 686 EDF files, 198 seizures |
+| Channels | 18 canonical bipolar derivations, frozen by a header-only pre-pass |
+| Conditioning | 60/120 Hz notch, 0.5–80 Hz bandpass |
+| Windowing | 10 s non-overlapping; 30 s guard band around seizure boundaries, excluded from training, scoring and the false-alarm denominator |
+| Features | 14 per channel per window → 252 per-channel or 56 aggregated |
+| Models | `DummyClassifier`, logistic regression, random forest, histogram gradient boosting |
+| Splits | leave-one-subject-out grouped on `subject_id`; a random-window split as a deliberate contrast |
+| Operating point | threshold and consecutive-window count chosen jointly on validation subjects |
+
+Ingest streams one file at a time — download, verify, featurise, delete — so the 45.76 GB
+dataset processes under a 26 GB disk ceiling. All 686 files passed SHA-256 with zero failures.
+
+---
+
+## Project structure
+
+```
+RULES.md                    44 binding rules; read before changing anything
+PRD-seizure-detection.md    original specification
+requirements.txt            app runtime dependencies
+seizure-detection/
+  src/seizure/              pipeline: ingest, labels, signal, features, splits, eval, models
+  app/streamlit_app.py      three-page demo application
+  configs/                  experiment configurations
+  artifacts/                committed results, report, fitted model
+  samples/                  bundled demo recording
+  scripts/                  sample-generation utilities
+  tests/                    142 tests
+  docs/data-notes.md        every discrepancy found in the source data
+```
+
+---
+
+## Limitations
+
+- **Bimodal performance.** Reliable for 4 of 23 held-out patients, no detections for 7. The
+  pooled 38% is an average over that, not a consistent hit rate.
+- **Low window precision.** Pooled 0.0037 — roughly 1 flagged window in 270 is ictal. The
+  consecutive-window rule suppresses this at the event level.
+- **20% time in alarm.** Count-based false-alarm rates hide this; both are reported.
+- **Fixed input format.** Requires 18 canonical bipolar channels at 256 Hz. Other montages are
+  refused, not adapted.
+- **Population.** Trained on paediatric presurgical monitoring. Behaviour on adults, other
+  hardware or ambulatory recordings is unmeasured.
+- **Not run in the cloud.** Databricks and MLflow code paths exist and have never executed
+  against a live service.
+
+---
+
+## Development
+
+```bash
+make test          # pytest, 142 tests
+make lint          # ruff
+```
+
+[`RULES.md`](../RULES.md) is binding and supersedes the PRD where they conflict. Each rule
+records a measurement or a defect that motivated it; Appendix C records which results
+overturned earlier conclusions.
 
 ---
 
 ## Attribution
 
-Open Data Commons Attribution License v1.0. PhysioNet requires citing both the resource and the
-platform paper:
+Built on the CHB-MIT Scalp EEG Database, distributed by PhysioNet under the
+[Open Data Commons Attribution License v1.0](https://opendatacommons.org/licenses/by/1-0/).
+Cite all three:
 
-> Guttag, J. (2010). CHB-MIT Scalp EEG Database (version 1.0.0). *PhysioNet*.
+> Guttag, J. (2010). CHB-MIT Scalp EEG Database (version 1.0.0). *PhysioNet.*
 > https://doi.org/10.13026/C2K01R
 >
 > Shoeb, A. (2009). *Application of Machine Learning to Epileptic Seizure Onset Detection and
@@ -293,3 +187,5 @@ platform paper:
 >
 > Goldberger, A., et al. (2000). PhysioBank, PhysioToolkit, and PhysioNet. *Circulation*
 > 101(23):e215–e220.
+
+Code is [MIT licensed](../LICENSE); the licence covers the code only, not the dataset.
