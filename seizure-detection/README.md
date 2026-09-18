@@ -7,6 +7,11 @@ cross-validation, with an honest report of what it can and cannot do.
 limits. Every number below was produced by `seizure report` from run artifacts — none was
 typed by hand (R27).
 
+**Live demo:** [eeg-seizure-detection-model.streamlit.app](https://eeg-seizure-detection-model.streamlit.app)
+— upload a recording, or click *Load sample recording* for a bundled five-minute excerpt of
+`chb01_03` around an annotated seizure. Source in [`app/`](app/), full evaluation in
+[`artifacts/report.md`](artifacts/report.md).
+
 > ### Not a medical device
 >
 > This is research code built on a public research dataset. It is **not** a diagnostic tool, has
