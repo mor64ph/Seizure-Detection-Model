@@ -260,13 +260,36 @@ done.** `notebooks/00_verify_portability.py` and the MLflow mirror in `tracking/
 written and unit-tested but have never executed against a live service. Any future claim that
 either works needs a real run behind it, not this rule.
 
-**R43.** `windowing.min_overlap_frac` stays at **0.5** until the owner decides otherwise.
-*Why:* the sweep measures 0.75 as better on every window metric (PR-AUC 0.211 vs 0.206) with
-event sensitivity slightly higher, and the confound — a smaller positive class makes PR-AUC
-harder — works against 0.75, so the finding is real. But the threshold defines the positive
-class, and redefining labels is an owner decision, not an optimisation. The measurement is
-recorded in the report at every run; the default does not move on the strength of it alone.
-This rule exists so the open decision is neither silently taken nor silently forgotten.
+**R43.** `windowing.min_overlap_frac` stays at **0.5**. Decided 2026-09-18, on measurement.
+*Why the question existed:* the PRD 6.2 sweep measured 0.75 as better on every **window**
+metric -- PR-AUC 0.211 against 0.206, recall and precision both up, event sensitivity nominally
+up 0.286 -> 0.292 -- and the prevalence confound works *against* 0.75, so the finding looked
+real and robust.
+*Why it was rejected:* run on the designated `rf` + joint configuration at the **event** level,
+0.75 costs **13 of 71 seizures** -- 18% of everything the detector finds -- to buy 0.84 fewer
+false alarms per hour:
+
+| metric | 0.50 | 0.75 |
+|---|---|---|
+| mean PR-AUC | 0.1782 | **0.1966** |
+| seizures detected | **71 of 185** | 58 of 185 |
+| FA/h | 4.363 | **3.525** |
+| time in alarm | 0.2610 | **0.2553** |
+| median latency | **5.75 s** | 6.75 s |
+| positive windows | 1133 | 1022 |
+
+**PR-AUC improved by 0.018 while the detector got materially worse.** Exactly 111 windows move
+-- those with overlap in [0.5, 0.75) -- and they are evidently where several seizures were being
+caught; reclassifying them as interictal removes the model's toehold on 13 events.
+*The transferable lesson:* the sweep used `logreg` as a cheap probe and reported window metrics.
+**A cheap proxy on the wrong metric inverted under the real configuration** -- the third time in
+this project (see also PRD 8.3 and R39). Never promote a labelling change on a window-metric
+sweep; re-measure on the designated model at the event level.
+*Enforce:* `training.relabel_overlap_min` implements the change as a column operation on the
+stored `overlap_frac`, so revisiting it costs nothing. It is deliberately **unset**. It lives in
+`training`, not `windowing`, because `windowing` feeds `extraction_hash`: editing the PRD field
+would orphan the 697 MB feature store and, since ingest deletes raw files (R11/R14), require
+re-downloading 45.76 GB. Do not "tidy" it into `windowing`.
 
 **R44.** The designated configuration is **`rf` + aggregated + joint (threshold, k)**, chosen by
 the project owner on 2026-09-17. Any report of it must carry the selection-bias warning.

@@ -119,6 +119,15 @@ class TrainCfg(_Base):
     # override. "event_f2" scores validation subjects at the event level, so the
     # same preference can be expressed without ever consulting a test metric.
     select_on: Literal["window_f2", "event_f2"] = "window_f2"
+    # Re-derive the ictal label from the stored `overlap_frac` column at
+    # training time. PRD 6.2's knob is `windowing.min_overlap_frac`, but that
+    # field feeds `extraction_hash`: changing it orphans the 697 MB feature
+    # store, and since ingest deletes raw files after extraction (R11/R14),
+    # rebuilding would mean re-downloading 45.76 GB. `overlap_frac` is kept on
+    # every window precisely so the same decision can be made as a column
+    # operation instead. It therefore lives in `training`, which only moves
+    # `full_hash`. None = use the label as extracted.
+    relabel_overlap_min: float | None = None
 
 
 class TrackCfg(_Base):

@@ -42,6 +42,25 @@ def _is_amplitude_invariant(col: str) -> bool:
     return any(m in col for m in _INVARIANT_MARKERS)
 
 
+def apply_relabel(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Re-derive labels at a different ictal-overlap threshold, if configured.
+
+    Reuses eval.sensitivity.relabel, which is already the tested definition of
+    this counterfactual: a window clears the new threshold and becomes ictal, a
+    guard window that still fails it stays excluded because its exclusion comes
+    from boundary proximity rather than from overlap.
+    """
+    frac = cfg.training.relabel_overlap_min
+    if frac is None:
+        return df
+    if "overlap_frac" not in df.columns:
+        raise ValueError(
+            "relabel_overlap_min is set but the feature table has no "
+            "overlap_frac column; re-extract or unset it")
+    from .eval.sensitivity import relabel
+    return relabel(df, float(frac))
+
+
 def feature_columns(df: pd.DataFrame, subset: str = "all") -> list[str]:
     cols = [c for c in df.columns if c not in KEY_COLS]
     if subset == "all":
@@ -182,7 +201,7 @@ def export_scores(
     that fold travel with them, which is what makes a slider honest: the default
     position is the operating point the pipeline actually chose.
     """
-    df = P.drop_guard(df)
+    df = P.drop_guard(apply_relabel(df, cfg))
     cols = feature_columns(df, cfg.training.feature_subset)
     name = model_name or cfg.training.headline_model or "rf"
     _, folds = P.assign(df, "loso", cfg.splits.n_val_subjects, cfg.splits.seed)
@@ -245,7 +264,7 @@ def fit_final(
     across folds, measured) is the reason a single number here is a compromise
     and not a solution.
     """
-    df = P.drop_guard(df)
+    df = P.drop_guard(apply_relabel(df, cfg))
     cols = feature_columns(df, cfg.training.feature_subset)
     name = model_name or cfg.training.headline_model or "rf"
     ds = P.downsample_negatives(df, cfg.training.negative_downsample_ratio,
@@ -272,7 +291,7 @@ def run_loso(
     durations: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, list[dict]]:
     """Returns (run_metrics long-form, per-fold detail)."""
-    df = P.drop_guard(df)
+    df = P.drop_guard(apply_relabel(df, cfg))
     cols = feature_columns(df, cfg.training.feature_subset)
     P.assert_deduplicated(df, cols)  # R6, before any split exists
 
@@ -372,7 +391,7 @@ def run_random_window(df: pd.DataFrame, cfg: Config) -> list[dict]:
     uninterpretable. The threshold is now chosen on a validation slice carved
     out of the training partition, exactly as run_loso does.
     """
-    df = P.drop_guard(df).reset_index(drop=True)
+    df = P.drop_guard(apply_relabel(df, cfg)).reset_index(drop=True)
     cols = feature_columns(df, cfg.training.feature_subset)
     P.assert_deduplicated(df, cols)
 
